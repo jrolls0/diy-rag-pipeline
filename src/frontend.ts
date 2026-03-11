@@ -267,8 +267,7 @@ function renderKbs() {
     return;
   }
   sel.innerHTML = kbs.map(function(kb) {
-    var owned = kb.owner_id === currentUserId || kb.owner_id === 'system';
-    return '<option value="' + esc(kb.id) + '">' + esc(kb.name) + (owned ? '' : ' \u2022 read only') + '</option>';
+    return '<option value="' + esc(kb.id) + '">' + esc(kb.name) + '</option>';
   }).join('');
   if (selectedKbId) sel.value = selectedKbId;
 }
@@ -291,12 +290,11 @@ async function selectKb(kbId) {
 
 function updateUploadZone() {
   var kb = kbs.find(function(k) { return k.id === selectedKbId; });
-  var canUpload = !!(kb && (kb.owner_id === currentUserId || kb.owner_id === 'system'));
+  // Every KB in the list is writable: personal KBs are only shown to their owner,
+  // shared KBs are open to everyone.
+  var canUpload = !!kb;
   document.getElementById('drop-zone').classList.toggle('hidden', !canUpload);
-  document.getElementById('read-only-indicator').classList.toggle('hidden', canUpload);
-  if (kb && !canUpload) {
-    document.getElementById('kb-owner-label').textContent = 'Owned by ' + kb.owner_id;
-  }
+  document.getElementById('read-only-indicator').classList.toggle('hidden', true);
 }
 
 async function createKb() {

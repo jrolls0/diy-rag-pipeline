@@ -41,17 +41,18 @@ export async function handleUpload(request: Request, env: Env, meta: RequestMeta
       // ── Resolve target knowledge base ─────────────────────────────
       const kbId = (formData.get("kb_id") as string | null)?.trim() || "kb_general";
 
-      // Verify the knowledge base exists and the user owns it
+      // Verify the knowledge base exists
       const kb = await env.DB.prepare(
-        `SELECT id, owner_id FROM knowledge_bases WHERE id = ?`,
-      ).bind(kbId).first<{ id: string; owner_id: string }>();
+        `SELECT id, owner_id, is_personal FROM knowledge_bases WHERE id = ?`,
+      ).bind(kbId).first<{ id: string; owner_id: string; is_personal: number }>();
 
       if (!kb) {
         send("error", { error: "Knowledge base not found." });
         writer.close(); return;
       }
-      if (kb.owner_id !== user.userId) {
-        send("error", { error: "You can only upload to knowledge bases you own." });
+      // Personal KBs are private — only the owner can upload to them
+      if (kb.is_personal === 1 && kb.owner_id !== user.userId) {
+        send("error", { error: "You can only upload to your own personal knowledge base." });
         writer.close(); return;
       }
 
