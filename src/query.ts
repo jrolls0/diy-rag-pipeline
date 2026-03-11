@@ -87,6 +87,7 @@ export async function handleQuery(request: Request, env: Env, meta: RequestMeta)
       const systemPrompt = `You are a helpful document assistant. Answer the user's question based ONLY on the provided context excerpts. If the context does not contain enough information to answer, say so honestly. Always reference which source(s) you used.`;
       const userPrompt = `Context:\n${contextBlock}\n\n---\n\nQuestion: ${question}`;
 
+      // Stream the LLM response token-by-token for a more responsive UX
       let answer = "";
       await step("Workers AI", "Generate AI response at the edge", "Retrieved context sent to Llama 3.1 8B on CF Workers AI to produce a grounded answer.", async () => {
         const llmResult: any = await env.AI.run("@cf/meta/llama-3.1-8b-instruct" as any, {
@@ -95,8 +96,35 @@ export async function handleQuery(request: Request, env: Env, meta: RequestMeta)
             { role: "user", content: userPrompt },
           ],
           max_tokens: 1024,
+          stream: true,
         }, { gateway: { id: "rag-gateway" } });
-        answer = llmResult.response ?? llmResult.result?.response ?? "Sorry, I could not generate an answer.";
+
+        // If streaming is supported, collect the tokens; otherwise use the full response
+        if (llmResult instanceof ReadableStream) {
+          const reader = llmResult.getReader();
+          const decoder = new TextDecoder();
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            const chunk = decoder.decode(value, { stream: true });
+            // Parse SSE-formatted chunks from Workers AI
+            const lines = chunk.split("\n");
+            for (const line of lines) {
+              if (line.startsWith("data: ") && !line.includes("[DONE]")) {
+                try {
+                  const parsed = JSON.parse(line.slice(6));
+                  if (parsed.response) {
+                    answer += parsed.response;
+                    // Stream each token to the client in real-time
+                    send("token", { text: parsed.response });
+                  }
+                } catch (_) {}
+              }
+            }
+          }
+        } else {
+          answer = llmResult.response ?? llmResult.result?.response ?? "Sorry, I could not generate an answer.";
+        }
       });
 
       // ── Step 8: Answer + sources returned ─────────────────────────
