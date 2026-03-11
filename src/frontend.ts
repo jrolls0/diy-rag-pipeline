@@ -45,6 +45,8 @@ export function getHtml(user: UserContext): string {
     .drop-active { border-color: #f6821f !important; background: rgba(246,130,31,.06) !important; }
     @keyframes fadeSlideIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
     .step-animate { animation: fadeSlideIn .3s ease-out forwards; }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+    .cursor-blink { display:inline-block; width:2px; height:0.9em; background:#6b7280; margin-left:1px; vertical-align:text-bottom; animation:blink 0.9s step-end infinite; }
     @keyframes pulse-dot { 0%,100% { opacity: .4; } 50% { opacity: 1; } }
     .pulse-dot { animation: pulse-dot 1.2s ease-in-out infinite; }
     .answer-text p { margin-bottom: .4rem; }
@@ -547,9 +549,28 @@ async function handleAsk(e) {
   input.value = '';
   document.getElementById('ask-btn').disabled = true;
 
-  const thinkId = appendMessage('assistant', '<div class="flex items-center gap-2"><div class="spinner"></div><span class="text-gray-400 text-xs">Thinking…</span></div>');
+  var streamingMsgId = null;
+  var streamingText = '';
+
+  var thinkId = appendMessage('assistant', '<div class="flex items-center gap-2"><div class="spinner"></div><span class="text-gray-400 text-xs">Thinking…</span></div>');
   clearTrace();
   addTraceSpinner();
+
+  function buildSourcesHtml(sources) {
+    if (!sources || sources.length === 0) return '';
+    var h = '<div class="mt-3 pt-2 border-t border-gray-200">';
+    h += '<p class="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-1.5">Sources</p>';
+    sources.forEach(function(s, i) {
+      h += '<details class="text-[11px] text-gray-500 mb-1">' +
+        '<summary class="cursor-pointer hover:text-gray-700 transition">' +
+          '<span class="font-medium text-cf-orange">[' + (i+1) + ']</span> ' + esc(s.filename) + ' &middot; chunk ' + s.chunk_index +
+        '</summary>' +
+        '<p class="mt-1 ml-4 text-gray-400 whitespace-pre-wrap text-[10px] leading-relaxed">' + esc(s.text_snippet) + '</p>' +
+      '</details>';
+    });
+    h += '</div>';
+    return h;
+  }
 
   try {
     const res = await fetch('/api/query', {
@@ -562,32 +583,50 @@ async function handleAsk(e) {
     consumeSSE(res, {
       meta: function(m) { showTraceHeader(m); },
       step: function(s) { addTraceRow(s); },
+      token: function(t) {
+        if (!streamingMsgId) {
+          // First token — swap out the thinking bubble for a live streaming one
+          removeMessage(thinkId);
+          streamingMsgId = appendMessage('assistant',
+            '<span id="stream-content"></span><span class="cursor-blink"></span>');
+        }
+        streamingText += t.token;
+        // Update as plain text while streaming (fast + safe)
+        var contentEl = document.getElementById('stream-content');
+        if (contentEl) {
+          contentEl.textContent = streamingText;
+          // Keep chat scrolled to bottom as tokens arrive
+          var msgs = document.getElementById('chat-messages');
+          msgs.scrollTop = msgs.scrollHeight;
+        }
+      },
       done: function(d) {
-        removeMessage(thinkId);
-        if (!d.success) {
-          appendMessage('assistant', '<span class="text-red-500">' + esc(d.error || 'Something went wrong.') + '</span>');
-        } else {
-          var html = '<div class="answer-text">' + formatAnswer(d.answer) + '</div>';
-          if (d.sources && d.sources.length > 0) {
-            html += '<div class="mt-3 pt-2 border-t border-gray-200">';
-            html += '<p class="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-1.5">Sources</p>';
-            d.sources.forEach(function(s, i) {
-              html += '<details class="text-[11px] text-gray-500 mb-1">' +
-                '<summary class="cursor-pointer hover:text-gray-700 transition">' +
-                  '<span class="font-medium text-cf-orange">[' + (i+1) + ']</span> ' + esc(s.filename) + ' &middot; chunk ' + s.chunk_index +
-                '</summary>' +
-                '<p class="mt-1 ml-4 text-gray-400 whitespace-pre-wrap text-[10px] leading-relaxed">' + esc(s.text_snippet) + '</p>' +
-              '</details>';
-            });
-            html += '</div>';
+        if (streamingMsgId) {
+          // Replace the raw streamed text with properly formatted HTML + sources
+          var el = document.getElementById(streamingMsgId);
+          if (el) {
+            el.querySelector('div').innerHTML =
+              '<div class="answer-text">' + formatAnswer(streamingText) + '</div>' +
+              buildSourcesHtml(d.sources);
           }
-          appendMessage('assistant', html);
+          streamingMsgId = null;
+          streamingText = '';
+        } else {
+          // Fallback: no tokens were streamed (e.g. error before first token)
+          removeMessage(thinkId);
+          if (!d.success) {
+            appendMessage('assistant', '<span class="text-red-500">' + esc(d.error || 'Something went wrong.') + '</span>');
+          } else {
+            appendMessage('assistant',
+              '<div class="answer-text">' + formatAnswer(d.answer) + '</div>' + buildSourcesHtml(d.sources));
+          }
         }
         document.getElementById('ask-btn').disabled = false;
         input.focus();
       },
       error: function(e) {
-        removeMessage(thinkId);
+        removeMessage(streamingMsgId || thinkId);
+        streamingMsgId = null; streamingText = '';
         appendMessage('assistant', '<span class="text-red-500">Error: ' + esc(e.error) + '</span>');
         document.getElementById('ask-btn').disabled = false;
         input.focus();

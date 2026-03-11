@@ -116,7 +116,7 @@ export async function handleQuery(request: Request, env: Env, meta: RequestMeta,
       // ── Step 6: Chunk text fetched from D1 ────────────────────────
       send("step", { service: "D1", title: "Fetch source text from CF database", detail: `Full text of ${rankedChunks.length} matching chunk${rankedChunks.length > 1 ? "s" : ""} retrieved from CF D1 edge database.`, durationMs: 0 });
 
-      // ── Step 7: Grounded answer generated ─────────────────────────
+      // ── Step 7: Grounded answer generated (streamed token-by-token) ──
       const contextBlock = rankedChunks
         .map((r, i) => `[Source ${i + 1} — ${r.chunk.filename}, chunk ${r.chunk.chunk_index}]\n${r.chunk.text}`)
         .join("\n\n---\n\n");
@@ -127,16 +127,44 @@ export async function handleQuery(request: Request, env: Env, meta: RequestMeta,
       const userPrompt = `Context:\n${contextBlock}\n\n---\n\nQuestion: ${question}`;
 
       let answer = "";
-      await step("Workers AI", "Generate AI response at the edge", "Retrieved context sent to Llama 3.1 8B on CF Workers AI to produce a grounded answer.", async () => {
-        const llmResult: any = await env.AI.run("@cf/meta/llama-3.1-8b-instruct" as any, {
+      await step("Workers AI", "Stream AI response at the edge", "Llama 3.1 8B streams the answer token-by-token from CF Workers AI back to the browser.", async () => {
+        const llmStream: any = await env.AI.run("@cf/meta/llama-3.1-8b-instruct" as any, {
           messages: [
             { role: "system", content: systemPrompt },
             ...historyMessages,
             { role: "user", content: userPrompt },
           ],
           max_tokens: 1024,
+          stream: true,
         }, { gateway: { id: "rag-gateway" } });
-        answer = llmResult.response ?? llmResult.result?.response ?? "Sorry, I could not generate an answer.";
+
+        // Workers AI returns a ReadableStream of SSE-formatted lines when stream:true
+        const reader = (llmStream as ReadableStream<Uint8Array>).getReader();
+        const decoder = new TextDecoder();
+        let remainder = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          // Decode and split on newlines; keep any incomplete line as remainder
+          const chunk = remainder + decoder.decode(value, { stream: true });
+          const lines = chunk.split("\n");
+          remainder = lines.pop() ?? "";
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            const payload = line.slice(6).trim();
+            if (payload === "[DONE]") break;
+            try {
+              const parsed = JSON.parse(payload) as { response?: string };
+              if (parsed.response) {
+                answer += parsed.response;
+                send("token", { token: parsed.response });
+              }
+            } catch { /* incomplete JSON in this line, skip */ }
+          }
+        }
+
+        if (!answer) answer = "Sorry, I could not generate an answer.";
       });
 
       // Persist the new exchange to the session DO (fire-and-forget is fine)
