@@ -7,6 +7,22 @@ export interface Env {
   DB: D1Database;
   VECTORIZE: VectorizeIndex;
   AI: Ai;
+  /** Durable Object namespace for per-user-per-KB conversation sessions. */
+  USER_SESSION: DurableObjectNamespace;
+}
+
+/** A named collection of documents that users can create and share. */
+export interface KnowledgeBase {
+  id: string;
+  name: string;
+  owner_id: string;
+  created_at: string;
+}
+
+/** The authenticated user extracted from the Cloudflare Access JWT. */
+export interface UserContext {
+  userId: string;
+  email: string;
 }
 
 /** Row shape returned from the `documents` table in D1 */

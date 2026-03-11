@@ -1,15 +1,25 @@
 import { Env, DocumentRow } from "./types";
 
 /**
- * Handle GET /api/documents
- * Returns a list of all uploaded documents ordered by most recent first.
+ * Handle GET /api/documents[?kb_id=xxx]
+ * Returns documents ordered most-recent first, optionally scoped to a KB.
  */
-export async function handleListDocuments(env: Env): Promise<Response> {
-  const result = await env.DB.prepare(
-    `SELECT id, filename, r2_key, size_bytes, mime_type, chunk_count, created_at
-     FROM documents
-     ORDER BY created_at DESC`,
-  ).all<DocumentRow>();
+export async function handleListDocuments(env: Env, kbId?: string): Promise<Response> {
+  let result;
+  if (kbId) {
+    result = await env.DB.prepare(
+      `SELECT id, filename, r2_key, size_bytes, mime_type, chunk_count, created_at
+       FROM documents
+       WHERE kb_id = ?
+       ORDER BY created_at DESC`,
+    ).bind(kbId).all<DocumentRow>();
+  } else {
+    result = await env.DB.prepare(
+      `SELECT id, filename, r2_key, size_bytes, mime_type, chunk_count, created_at
+       FROM documents
+       ORDER BY created_at DESC`,
+    ).all<DocumentRow>();
+  }
 
   return Response.json({ success: true, documents: result.results });
 }

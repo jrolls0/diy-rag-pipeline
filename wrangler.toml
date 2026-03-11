@@ -26,6 +26,17 @@ binding = "AI"
 [ai.gateway]
 id = "rag-gateway"
 
+# Durable Object for per-user-per-KB conversation history
+[durable_objects]
+bindings = [
+  { name = "USER_SESSION", class_name = "UserSession" }
+]
+
+# Required: tells Cloudflare to register the UserSession class on first deploy
+[[migrations]]
+tag = "v1"
+new_classes = ["UserSession"]
+
 # Allow importing .css and .txt files as text modules
 [[rules]]
 type = "Text"

@@ -1,4 +1,5 @@
-import { Env, ChunkRow, SourceCitation, PipelineStep, RequestMeta } from "./types";
+import { Env, ChunkRow, SourceCitation, PipelineStep, RequestMeta, UserContext } from "./types";
+import type { Message } from "./session";
 
 /** How many nearest-neighbour chunks to retrieve */
 const TOP_K = 5;
@@ -7,9 +8,10 @@ const TOP_K = 5;
  * Query handler using SSE so each pipeline step streams to the client
  * as it completes, enabling real-time activity panel updates.
  */
-export async function handleQuery(request: Request, env: Env, meta: RequestMeta): Promise<Response> {
-  const body = (await request.json()) as { question?: string };
+export async function handleQuery(request: Request, env: Env, meta: RequestMeta, user: UserContext): Promise<Response> {
+  const body = (await request.json()) as { question?: string; kb_id?: string };
   const question = body.question?.trim();
+  const kbId = body.kb_id?.trim() || "kb_general";
 
   if (!question) {
     return Response.json({ success: false, error: "No question provided." }, { status: 400 });
@@ -38,8 +40,16 @@ export async function handleQuery(request: Request, env: Env, meta: RequestMeta)
       send("meta", meta);
       send("step", { service: "Worker", title: `Request received at ${meta.colo} PoP`, detail: `Request handled by a serverless function at the nearest edge node.`, durationMs: Math.round(performance.now() - t0) });
 
-      // ── Step 2: Session loaded from Durable Object ────────────────
-      send("step", { service: "Durable Object", title: "Load session state", detail: "Conversation history loaded from a persistent, single-threaded session object.", durationMs: 0 });
+      // ── Step 2: Session loaded from Durable Object ─────────────────
+      // Each user×KB pair gets its own DO instance for isolated history.
+      let history: Message[] = [];
+      await step("Durable Object", "Load session state", "Conversation history loaded from a persistent, single-threaded session object.", async () => {
+        const sessionName = `${user.userId}::${kbId}`;
+        const doId = env.USER_SESSION.idFromName(sessionName);
+        const session = env.USER_SESSION.get(doId);
+        const res = await session.fetch("https://do/history");
+        history = (await res.json()) as Message[];
+      });
 
       // ── Step 3: Routed through AI Gateway ─────────────────────────
       send("step", { service: "AI Gateway", title: "Route AI request", detail: "AI request passed through CF AI Gateway for logging, caching, and rate limiting.", durationMs: 0 });
@@ -55,14 +65,14 @@ export async function handleQuery(request: Request, env: Env, meta: RequestMeta)
       let rankedChunks: RankedChunk[] = [];
 
       const vecResult = await step("Vectorize", "Search CF vector database", "Question vector compared against all stored document vectors to find the most relevant content.", async () => {
-        return tryVectorize(questionVector, env);
+        return tryVectorize(questionVector, kbId, env);
       });
 
       if (vecResult.length > 0) {
         rankedChunks = vecResult;
       } else {
         rankedChunks = await step("D1", "Search CF database (fallback)", "Cosine similarity computed directly across stored embeddings.", async () => {
-          return d1CosineFallback(questionVector, env);
+          return d1CosineFallback(questionVector, kbId, env);
         });
       }
 
@@ -85,6 +95,8 @@ export async function handleQuery(request: Request, env: Env, meta: RequestMeta)
         .join("\n\n---\n\n");
 
       const systemPrompt = `You are a helpful document assistant. Answer the user's question based ONLY on the provided context excerpts. If the context does not contain enough information to answer, say so honestly. Always reference which source(s) you used.`;
+      // Include the last few history turns so the LLM has conversational context
+      const historyMessages = history.slice(-10).map((m) => ({ role: m.role, content: m.content }));
       const userPrompt = `Context:\n${contextBlock}\n\n---\n\nQuestion: ${question}`;
 
       let answer = "";
@@ -92,6 +104,7 @@ export async function handleQuery(request: Request, env: Env, meta: RequestMeta)
         const llmResult: any = await env.AI.run("@cf/meta/llama-3.1-8b-instruct" as any, {
           messages: [
             { role: "system", content: systemPrompt },
+            ...historyMessages,
             { role: "user", content: userPrompt },
           ],
           max_tokens: 1024,
@@ -99,10 +112,16 @@ export async function handleQuery(request: Request, env: Env, meta: RequestMeta)
         answer = llmResult.response ?? llmResult.result?.response ?? "Sorry, I could not generate an answer.";
       });
 
+      // Persist the new exchange to the session DO (fire-and-forget is fine)
+      const sessionName = `${user.userId}::${kbId}`;
+      const doId = env.USER_SESSION.idFromName(sessionName);
+      const session = env.USER_SESSION.get(doId);
+      void session.fetch("https://do/message", { method: "POST", body: JSON.stringify({ role: "user", content: question }) });
+      void session.fetch("https://do/message", { method: "POST", body: JSON.stringify({ role: "assistant", content: answer }) });
+
       // ── Step 8: Answer + sources returned ─────────────────────────
       send("step", { service: "Worker", title: "Return response to browser", detail: "Final answer and source citations sent back to the user.", durationMs: 0 });
 
-      // ── 5. Build source citations + return ────────────────────────
       const sources: SourceCitation[] = rankedChunks.map((r) => ({
         document_id: r.chunk.document_id,
         filename: r.chunk.filename,
@@ -140,11 +159,13 @@ interface RankedChunk {
 
 async function tryVectorize(
   questionVector: number[],
+  kbId: string,
   env: Env,
 ): Promise<RankedChunk[]> {
   try {
+    // Fetch extra matches so we still hit TOP_K after filtering by KB
     const vectorMatches = await env.VECTORIZE.query(questionVector, {
-      topK: TOP_K,
+      topK: TOP_K * 3,
       returnMetadata: "all",
     });
 
@@ -155,13 +176,15 @@ async function tryVectorize(
     const chunkIds = vectorMatches.matches.map((m) => m.id);
     const placeholders = chunkIds.map(() => "?").join(", ");
 
+    // Filter by kb_id in the JOIN so results are scoped to the selected KB
     const chunkResults = await env.DB.prepare(
       `SELECT c.id, c.document_id, c.chunk_index, c.text, d.filename
        FROM chunks c
        JOIN documents d ON d.id = c.document_id
-       WHERE c.id IN (${placeholders})`,
+       WHERE c.id IN (${placeholders})
+         AND d.kb_id = ?`,
     )
-      .bind(...chunkIds)
+      .bind(...chunkIds, kbId)
       .all<ChunkRow & { filename: string }>();
 
     const chunkMap = new Map(chunkResults.results.map((r) => [r.id, r]));
@@ -194,14 +217,16 @@ async function tryVectorize(
  */
 async function d1CosineFallback(
   questionVector: number[],
+  kbId: string,
   env: Env,
 ): Promise<RankedChunk[]> {
   const rows = await env.DB.prepare(
     `SELECT c.id, c.document_id, c.chunk_index, c.text, c.embedding, d.filename
      FROM chunks c
      JOIN documents d ON d.id = c.document_id
-     WHERE c.embedding IS NOT NULL`,
-  ).all<ChunkRow & { filename: string; embedding: string }>();
+     WHERE c.embedding IS NOT NULL
+       AND d.kb_id = ?`,
+  ).bind(kbId).all<ChunkRow & { filename: string; embedding: string }>();
 
   if (!rows.results || rows.results.length === 0) return [];
 

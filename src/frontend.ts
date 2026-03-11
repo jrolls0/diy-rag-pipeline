@@ -1,8 +1,10 @@
+import { UserContext } from "./types";
+
 /**
  * Returns the full single-page HTML for the RAG app.
  * Cloudflare-branded, 3-column layout for customer demos.
  */
-export function getHtml(): string {
+export function getHtml(user: UserContext): string {
   return /*html*/ `<!DOCTYPE html>
 <html lang="en" class="h-full">
 <head>
@@ -62,6 +64,10 @@ export function getHtml(): string {
       </div>
     </div>
     <div class="flex items-center gap-3">
+      <span class="text-[11px] text-gray-400 border border-cf-border rounded-lg px-2.5 py-1 bg-cf-surface flex items-center gap-1.5">
+        <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z"/></svg>
+        ${user.email}
+      </span>
       <a href="/architecture" class="text-[11px] font-semibold text-cf-orange border border-cf-orange/40 rounded-lg px-3 py-1.5 hover:bg-orange-50 transition flex items-center gap-1.5">
         <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z"/></svg>
         Architecture Map &rarr;
@@ -76,6 +82,32 @@ export function getHtml(): string {
     <aside class="w-72 flex flex-col border-r border-cf-border bg-white flex-shrink-0">
       <div class="px-4 pt-4 pb-2">
         <h2 class="text-xs font-semibold uppercase tracking-widest text-cf-muted">Knowledge Library</h2>
+      </div>
+
+      <!-- ── KB selector ──────────────────────────────────────────── -->
+      <div class="px-3 pb-3 border-b border-cf-border">
+        <div class="flex items-center justify-between mb-1.5">
+          <span class="text-[10px] font-medium uppercase tracking-wider text-cf-muted">Knowledge Base</span>
+          <button onclick="showCreateKbForm()" id="new-kb-btn"
+                  class="text-[10px] font-semibold text-cf-orange hover:text-cf-orangeLight transition flex items-center gap-0.5">
+            <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg>
+            New
+          </button>
+        </div>
+        <select id="kb-select" onchange="selectKb(this.value)"
+                class="w-full text-xs border border-cf-border rounded-lg px-2.5 py-1.5 bg-white focus:outline-none focus:border-cf-orange text-cf-dark cursor-pointer">
+          <option value="">Loading…</option>
+        </select>
+        <!-- Create KB inline form -->
+        <div id="create-kb-form" class="hidden mt-2">
+          <input id="kb-name-input" type="text" placeholder="e.g. Engineering Docs"
+                 class="w-full text-xs border border-cf-border rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-cf-orange"
+                 onkeydown="if(event.key==='Enter')createKb()" />
+          <div class="flex gap-1.5 mt-1.5">
+            <button onclick="createKb()" class="flex-1 text-[11px] font-semibold bg-cf-orange text-white rounded-lg py-1 hover:bg-cf-orangeLight transition">Create</button>
+            <button onclick="hideCreateKbForm()" class="flex-1 text-[11px] font-semibold bg-gray-100 text-gray-500 rounded-lg py-1 hover:bg-gray-200 transition">Cancel</button>
+          </div>
+        </div>
       </div>
 
       <!-- Upload zone -->
@@ -99,6 +131,15 @@ export function getHtml(): string {
           <div class="spinner"></div>
           <span id="upload-bar-text" class="text-cf-muted">Processing…</span>
         </div>
+      </div>
+
+      <!-- Read-only overlay (shown when user doesn't own the selected KB) -->
+      <div id="read-only-indicator" class="mx-3 mb-3 p-4 border border-dashed border-gray-200 rounded-xl text-center hidden">
+        <div class="w-8 h-8 mx-auto mb-2 rounded-lg bg-gray-50 flex items-center justify-center">
+          <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z"/></svg>
+        </div>
+        <p class="text-xs text-gray-500 font-medium">Read only</p>
+        <p id="kb-owner-label" class="text-[10px] text-gray-400 mt-0.5"></p>
       </div>
 
       <!-- Document list -->
@@ -178,9 +219,12 @@ const SVC = {
 };
 
 let documents = [];
+let kbs = [];
+let selectedKbId = null;
+const currentUserId = ${JSON.stringify(user.email)};
 let traceStartTime = 0;
 let traceStepIndex = 0;
-(async () => { await refreshDocuments(); })();
+(async () => { await loadKbs(); })();
 
 // =====================================================================
 // Panel toggle
@@ -196,6 +240,94 @@ function togglePanel() {
     panel.classList.add('hidden');
     btn.classList.remove('hidden');
   }
+}
+
+// =====================================================================
+// Knowledge Bases
+// =====================================================================
+async function loadKbs() {
+  try {
+    const res = await fetch('/api/kbs');
+    const data = await res.json();
+    kbs = data.kbs || [];
+    renderKbs();
+    if (kbs.length > 0 && !selectedKbId) {
+      await selectKb(kbs[0].id);
+    } else {
+      updateUploadZone();
+      await refreshDocuments();
+    }
+  } catch(e) { console.error('Failed to load KBs', e); }
+}
+
+function renderKbs() {
+  var sel = document.getElementById('kb-select');
+  if (kbs.length === 0) {
+    sel.innerHTML = '<option value="">No knowledge bases — create one ↑</option>';
+    return;
+  }
+  sel.innerHTML = kbs.map(function(kb) {
+    var owned = kb.owner_id === currentUserId || kb.owner_id === 'system';
+    return '<option value="' + esc(kb.id) + '">' + esc(kb.name) + (owned ? '' : ' \u2022 read only') + '</option>';
+  }).join('');
+  if (selectedKbId) sel.value = selectedKbId;
+}
+
+async function selectKb(kbId) {
+  selectedKbId = kbId;
+  var sel = document.getElementById('kb-select');
+  if (sel) sel.value = kbId;
+  // Reset chat when switching KBs so context doesn't bleed across
+  document.getElementById('chat-messages').innerHTML =
+    '<div id="chat-placeholder" class="flex flex-col items-center justify-center h-full text-center">' +
+      '<div class="w-14 h-14 rounded-2xl bg-orange-50 flex items-center justify-center mb-4">' +
+        '<svg class="w-7 h-7 text-cf-orange" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8.625 12a.375.375 0 11-.75 0 .375.375 0 01.75 0zm4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z"/><path stroke-linecap="round" stroke-linejoin="round" d="M12 2.25c-5.385 0-9.75 4.365-9.75 9.75s4.365 9.75 9.75 9.75 9.75-4.365 9.75-9.75S17.385 2.25 12 2.25z"/></svg>' +
+      '</div>' +
+      '<p class="text-sm text-cf-muted max-w-xs">Upload a document to this knowledge base, then ask questions about it here.</p>' +
+    '</div>';
+  updateUploadZone();
+  await refreshDocuments();
+}
+
+function updateUploadZone() {
+  var kb = kbs.find(function(k) { return k.id === selectedKbId; });
+  var canUpload = !!(kb && (kb.owner_id === currentUserId || kb.owner_id === 'system'));
+  document.getElementById('drop-zone').classList.toggle('hidden', !canUpload);
+  document.getElementById('read-only-indicator').classList.toggle('hidden', canUpload);
+  if (kb && !canUpload) {
+    document.getElementById('kb-owner-label').textContent = 'Owned by ' + kb.owner_id;
+  }
+}
+
+async function createKb() {
+  var input = document.getElementById('kb-name-input');
+  var name = input.value.trim();
+  if (!name) { input.focus(); return; }
+  try {
+    var res = await fetch('/api/kbs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name }),
+    });
+    var data = await res.json();
+    if (!data.success) { alert(data.error || 'Failed to create knowledge base.'); return; }
+    input.value = '';
+    hideCreateKbForm();
+    await loadKbs();
+    await selectKb(data.kb.id);
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+function showCreateKbForm() {
+  document.getElementById('create-kb-form').classList.remove('hidden');
+  document.getElementById('new-kb-btn').classList.add('hidden');
+  setTimeout(function() { document.getElementById('kb-name-input').focus(); }, 50);
+}
+
+function hideCreateKbForm() {
+  document.getElementById('create-kb-form').classList.add('hidden');
+  document.getElementById('new-kb-btn').classList.remove('hidden');
+  document.getElementById('kb-name-input').value = '';
 }
 
 // =====================================================================
@@ -314,7 +446,8 @@ function consumeSSE(response, handlers) {
 // =====================================================================
 async function refreshDocuments() {
   try {
-    const res = await fetch('/api/documents');
+    const url = selectedKbId ? '/api/documents?kb_id=' + encodeURIComponent(selectedKbId) : '/api/documents';
+    const res = await fetch(url);
     const data = await res.json();
     documents = data.documents || [];
     renderDocuments();
@@ -367,6 +500,7 @@ async function uploadFile(file) {
 
   const form = new FormData();
   form.append('file', file);
+  if (selectedKbId) form.append('kb_id', selectedKbId);
 
   try {
     const res = await fetch('/api/upload', { method: 'POST', body: form });
@@ -427,7 +561,7 @@ async function handleAsk(e) {
     const res = await fetch('/api/query', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question }),
+      body: JSON.stringify({ question, kb_id: selectedKbId }),
     });
     removeTraceSpinner();
 
