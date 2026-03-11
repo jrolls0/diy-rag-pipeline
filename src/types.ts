@@ -16,6 +16,8 @@ export interface KnowledgeBase {
   id: string;
   name: string;
   owner_id: string;
+  /** 1 = private personal KB (owner-only), 0 = shared KB (everyone can read) */
+  is_personal: number;
   created_at: string;
 }
 

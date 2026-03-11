@@ -7,25 +7,30 @@ import { generateId } from "./utils";
  * on their first visit so they always land in an editable space.
  */
 export async function handleListKbs(env: Env, userId: string): Promise<Response> {
-  // Check if this user already owns a personal KB
+  // Check if this user already has a personal KB
   const existing = await env.DB.prepare(
-    `SELECT id FROM knowledge_bases WHERE owner_id = ?`,
+    `SELECT id FROM knowledge_bases WHERE owner_id = ? AND is_personal = 1`,
   ).bind(userId).first<{ id: string }>();
 
   if (!existing) {
-    // First visit — create their personal KB
+    // First visit — create their private personal KB
     const personalId = "kb_" + generateId();
     const displayName = userId.includes("@")
       ? userId.split("@")[0] + "'s Personal KB"
       : userId + "'s Personal KB";
     await env.DB.prepare(
-      `INSERT INTO knowledge_bases (id, name, owner_id) VALUES (?, ?, ?)`,
+      `INSERT INTO knowledge_bases (id, name, owner_id, is_personal) VALUES (?, ?, ?, 1)`,
     ).bind(personalId, displayName, userId).run();
   }
 
+  // Return: this user's personal KB + all shared (non-personal) KBs
+  // Other users' personal KBs are intentionally excluded.
   const result = await env.DB.prepare(
-    `SELECT id, name, owner_id, created_at FROM knowledge_bases ORDER BY created_at DESC`,
-  ).all<KnowledgeBase>();
+    `SELECT id, name, owner_id, is_personal, created_at
+     FROM knowledge_bases
+     WHERE is_personal = 0 OR owner_id = ?
+     ORDER BY is_personal DESC, created_at DESC`,
+  ).bind(userId).all<KnowledgeBase>();
 
   return Response.json({ success: true, kbs: result.results });
 }
