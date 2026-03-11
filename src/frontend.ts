@@ -80,22 +80,18 @@ export function getHtml(user: UserContext): string {
 
     <!-- ══ LEFT: Knowledge Library ════════════════════════════════ -->
     <aside class="w-72 flex flex-col border-r border-cf-border bg-white flex-shrink-0">
-      <div class="px-4 pt-4 pb-2">
-        <h2 class="text-xs font-semibold uppercase tracking-widest text-cf-muted">Knowledge Library</h2>
-      </div>
-
       <!-- ── KB selector ──────────────────────────────────────────── -->
-      <div class="px-3 pb-3 border-b border-cf-border">
-        <div class="flex items-center justify-between mb-1.5">
-          <span class="text-[10px] font-medium uppercase tracking-wider text-cf-muted">Knowledge Base</span>
+      <div class="px-4 pt-4 pb-3 border-b border-cf-border">
+        <div class="flex items-center justify-between mb-2.5">
+          <h2 class="text-xs font-semibold uppercase tracking-widest text-cf-muted">Knowledge Library</h2>
           <button onclick="showCreateKbForm()" id="new-kb-btn"
-                  class="text-[10px] font-semibold text-cf-orange hover:text-cf-orangeLight transition flex items-center gap-0.5">
+                  class="text-[11px] font-semibold text-cf-orange hover:text-cf-orangeLight transition flex items-center gap-1">
             <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg>
             New
           </button>
         </div>
         <select id="kb-select" onchange="selectKb(this.value)"
-                class="w-full text-xs border border-cf-border rounded-lg px-2.5 py-1.5 bg-white focus:outline-none focus:border-cf-orange text-cf-dark cursor-pointer">
+                class="w-full text-sm border border-cf-border rounded-lg px-2.5 py-2 bg-white focus:outline-none focus:border-cf-orange text-cf-dark cursor-pointer font-medium">
           <option value="">Loading…</option>
         </select>
         <!-- Create KB inline form -->
