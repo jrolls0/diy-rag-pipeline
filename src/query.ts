@@ -54,10 +54,37 @@ export async function handleQuery(request: Request, env: Env, meta: RequestMeta,
       // ── Step 3: Routed through AI Gateway ─────────────────────────
       send("step", { service: "AI Gateway", title: "Route AI request", detail: "AI request passed through CF AI Gateway for logging, caching, and rate limiting.", durationMs: 0 });
 
+      // ── Step 3.5: Rewrite follow-up into standalone query ─────────
+      // Follow-up questions like "what do you mean by that?" are too vague
+      // to retrieve relevant chunks on their own. If there's prior history,
+      // ask the LLM to expand the question into a self-contained retrieval query.
+      // The original question is still used in the final answer prompt.
+      let retrievalQuery = question;
+      if (history.length > 0) {
+        await step("Workers AI", "Rewrite follow-up for retrieval", "Follow-up question rewritten into a standalone query using conversation context so vector search finds the right documents.", async () => {
+          const rewriteResult: any = await env.AI.run("@cf/meta/llama-3.1-8b-instruct" as any, {
+            messages: [
+              {
+                role: "system",
+                content: "Given the conversation history and a follow-up question, rewrite the follow-up into a fully self-contained question that includes all necessary context. Return ONLY the rewritten question — no explanation, no preamble, no quotes.",
+              },
+              ...history.slice(-6).map((m) => ({ role: m.role, content: m.content })),
+              {
+                role: "user",
+                content: `Follow-up question: ${question}\n\nRewritten standalone question:`,
+              },
+            ],
+            max_tokens: 128,
+          }, { gateway: { id: "rag-gateway" } });
+          const rewritten = (rewriteResult.response ?? "").trim().replace(/^["']|["']$/g, "");
+          if (rewritten.length > 5) retrievalQuery = rewritten;
+        });
+      }
+
       // ── Step 4: Question embedded by Workers AI ───────────────────
       let questionVector!: number[];
       await step("Workers AI", "Convert question to vector via CF AI", "Question text converted into a semantic search vector using bge-base-en-v1.5 on CF Workers AI.", async () => {
-        const embeddingResult: any = await env.AI.run("@cf/baai/bge-base-en-v1.5" as any, { text: [question] }, { gateway: { id: "rag-gateway" } });
+        const embeddingResult: any = await env.AI.run("@cf/baai/bge-base-en-v1.5" as any, { text: [retrievalQuery] }, { gateway: { id: "rag-gateway" } });
         questionVector = Array.from(embeddingResult.data[0] as number[]);
       });
 
