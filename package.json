@@ -1,0 +1,25 @@
+{
+  "name": "diy_rag_pipeline",
+  "version": "1.0.0",
+  "description": "",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:migrate": "wrangler d1 migrations apply rag-db",
+    "db:migrate:local": "wrangler d1 migrations apply rag-db --local"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260310.1",
+    "esbuild": "^0.27.3",
+    "typescript": "^5.9.3",
+    "wrangler": "^4.72.0"
+  },
+  "dependencies": {
+    "unpdf": "^1.4.0"
+  }
+}
