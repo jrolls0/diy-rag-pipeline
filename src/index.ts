@@ -53,7 +53,7 @@ export default {
         const docId = pathname.split("/api/documents/")[1];
         response = await handleDeleteDocument(docId, env);
       } else if (pathname === "/api/kbs" && method === "GET") {
-        response = await handleListKbs(env);
+        response = await handleListKbs(env, user.userId);
       } else if (pathname === "/api/kbs" && method === "POST") {
         response = await handleCreateKb(request, env, user.userId);
       }

@@ -3,9 +3,26 @@ import { generateId } from "./utils";
 
 /**
  * GET /api/kbs
- * Returns all knowledge bases ordered most-recent first.
+ * Returns all knowledge bases. Auto-creates a personal KB for the user
+ * on their first visit so they always land in an editable space.
  */
-export async function handleListKbs(env: Env): Promise<Response> {
+export async function handleListKbs(env: Env, userId: string): Promise<Response> {
+  // Check if this user already owns a personal KB
+  const existing = await env.DB.prepare(
+    `SELECT id FROM knowledge_bases WHERE owner_id = ?`,
+  ).bind(userId).first<{ id: string }>();
+
+  if (!existing) {
+    // First visit — create their personal KB
+    const personalId = "kb_" + generateId();
+    const displayName = userId.includes("@")
+      ? userId.split("@")[0] + "'s Personal KB"
+      : userId + "'s Personal KB";
+    await env.DB.prepare(
+      `INSERT INTO knowledge_bases (id, name, owner_id) VALUES (?, ?, ?)`,
+    ).bind(personalId, displayName, userId).run();
+  }
+
   const result = await env.DB.prepare(
     `SELECT id, name, owner_id, created_at FROM knowledge_bases ORDER BY created_at DESC`,
   ).all<KnowledgeBase>();
