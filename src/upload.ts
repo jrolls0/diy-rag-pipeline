@@ -50,7 +50,7 @@ export async function handleUpload(request: Request, env: Env, meta: RequestMeta
         send("error", { error: "Knowledge base not found." });
         writer.close(); return;
       }
-      if (kb.owner_id !== user.userId && kb.owner_id !== "system") {
+      if (kb.owner_id !== user.userId) {
         send("error", { error: "You can only upload to knowledge bases you own." });
         writer.close(); return;
       }

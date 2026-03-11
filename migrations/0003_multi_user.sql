@@ -9,10 +9,6 @@ CREATE TABLE IF NOT EXISTS knowledge_bases (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
--- Seed a default "General" KB so legacy documents have a home
-INSERT OR IGNORE INTO knowledge_bases (id, name, owner_id)
-VALUES ('kb_general', 'General', 'system');
-
 -- Add the uploading user's ID to each document for attribution
 ALTER TABLE documents ADD COLUMN user_id TEXT NOT NULL DEFAULT 'legacy';
 
