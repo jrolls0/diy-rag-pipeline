@@ -121,7 +121,7 @@ export async function handleQuery(request: Request, env: Env, meta: RequestMeta,
         .map((r, i) => `[${i + 1}]\n${r.chunk.text}`)
         .join("\n\n---\n\n");
 
-      const systemPrompt = `You are a helpful document assistant. Answer the user's question based ONLY on the provided context excerpts. Write naturally and conversationally — do NOT include filenames, chunk numbers, or "Source N" labels in your answer. When you reference a piece of information, cite it with just a bracketed number like [1] or [2]. If the context does not contain enough information to answer, say so honestly.`;
+      const systemPrompt = `You are a helpful document assistant. Answer the user's question based ONLY on the provided context excerpts. Be concise and direct. Write naturally — do NOT mention filenames, chunk numbers, or "Source N" labels. When you use information from a specific excerpt, place a small inline citation like [1] or [2] immediately after that sentence. Do NOT add a References or Sources section at the end. If the context does not contain enough information, say so briefly.`;
       // Include the last few history turns so the LLM has conversational context
       const historyMessages = history.slice(-10).map((m) => ({ role: m.role, content: m.content }));
       const userPrompt = `Context:\n${contextBlock}\n\n---\n\nQuestion: ${question}`;

@@ -632,7 +632,7 @@ async function handleAsk(e) {
             var cur = el.querySelector('.cursor-blink');
             if (cur) cur.remove();
             var src = buildSourcesHtml(d.sources);
-            if (src) el.querySelector('div').insertAdjacentHTML('afterend', src);
+            if (src) document.getElementById('stream-content').insertAdjacentHTML('afterend', src);
           }
           streamingMsgId = null;
           streamingText = '';
