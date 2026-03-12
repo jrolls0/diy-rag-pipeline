@@ -52,7 +52,7 @@ const INFO = {
   d1: {
     title: "D1 (Serverless SQL Database)",
     desc: "A serverless SQLite database that runs at the edge. Full SQL support without managing database servers, connections, or scaling.",
-    details: ["Replaces: AWS RDS, PlanetScale, managed Postgres", "SQLite-compatible \u2014 familiar SQL syntax", "Read replicas automatically distributed globally", "Pay only for what you use, scales to zero"]
+    details: ["SQLite-compatible \u2014 familiar SQL syntax", "Read replicas automatically distributed globally", "Pay only for what you use, scales to zero"]
   },
   vectorize: {
     title: "Vectorize (Vector Database)",
