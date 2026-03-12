@@ -102,24 +102,30 @@ export async function handleQuery(request: Request, env: Env, meta: RequestMeta,
         .map((r, i) => `[Source ${i + 1} — ${r.chunk.filename}, chunk ${r.chunk.chunk_index}]\n${r.chunk.text}`)
         .join("\n\n---\n\n");
 
-      const systemPrompt = `You are a helpful document assistant. Answer the user's question using the provided context excerpts and our conversation history. If neither contains enough information, say so honestly. Write in clear, natural prose — do NOT mention source names, filenames, chunk numbers, or any citation markers in your answer.`;
-      // Include recent history for conversational context, but truncate long
-      // assistant answers to keep the total prompt small — prefill time scales
-      // linearly with input tokens, so a bloated prompt causes 15-20s TTFT delays.
-      const historyMessages = history.slice(-6).map((m) => ({
-        role: m.role,
-        content: m.role === "assistant" && m.content.length > 300
-          ? m.content.slice(0, 300) + "…"
-          : m.content,
-      }));
-      const userPrompt = `Context:\n${contextBlock}\n\n---\n\nQuestion: ${question}`;
+      const systemPrompt = `You are a helpful document assistant. Answer the user's question using the provided context excerpts and the conversation history. If neither contains enough information, say so honestly. Write in clear, natural prose — do NOT mention source names, filenames, chunk numbers, or any citation markers in your answer.`;
+
+      // Build conversation history block — placed right before the question
+      // in the user prompt so the 8B model can't lose track of it among chunks.
+      // Truncate assistant messages to 300 chars to keep prompt small.
+      let conversationBlock = "";
+      if (history.length > 0) {
+        const recent = history.slice(-6);
+        conversationBlock = "Conversation history:\n" + recent.map((m) => {
+          const label = m.role === "user" ? "User" : "Assistant";
+          const text = m.role === "assistant" && m.content.length > 300
+            ? m.content.slice(0, 300) + "…"
+            : m.content;
+          return `${label}: ${text}`;
+        }).join("\n") + "\n\n---\n\n";
+      }
+
+      const userPrompt = `Context:\n${contextBlock}\n\n---\n\n${conversationBlock}Question: ${question}`;
 
       let answer = "";
       await step("Workers AI", "Stream AI response at the edge", "Llama 3.1 8B streams the answer token-by-token from CF Workers AI back to the browser.", async () => {
         const llmStream: any = await env.AI.run("@cf/meta/llama-3.1-8b-instruct" as any, {
           messages: [
             { role: "system", content: systemPrompt },
-            ...historyMessages,
             { role: "user", content: userPrompt },
           ],
           max_tokens: 700,
