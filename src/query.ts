@@ -60,7 +60,7 @@ export async function handleQuery(request: Request, env: Env, meta: RequestMeta,
           history = (await res.json()) as Message[];
         }),
         step("Workers AI", "Convert question to vector via CF AI", "Question text converted into a semantic search vector using bge-base-en-v1.5 on CF Workers AI.", async () => {
-          const embeddingResult: any = await env.AI.run("@cf/baai/bge-base-en-v1.5" as any, { text: [question] }, { gateway: { id: "rag-gateway" } });
+          const embeddingResult: any = await env.AI.run("@cf/baai/bge-base-en-v1.5" as any, { text: [question] });
           questionVector = Array.from(embeddingResult.data[0] as number[]);
         }),
       ]);
