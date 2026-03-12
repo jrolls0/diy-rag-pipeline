@@ -102,7 +102,7 @@ export async function handleQuery(request: Request, env: Env, meta: RequestMeta,
         .map((r, i) => `[Source ${i + 1} — ${r.chunk.filename}, chunk ${r.chunk.chunk_index}]\n${r.chunk.text}`)
         .join("\n\n---\n\n");
 
-      const systemPrompt = `You are a helpful document assistant. Answer the user's question based ONLY on the provided context excerpts. If the context does not contain enough information to answer, say so honestly. Write in clear, natural prose — do NOT mention source names, filenames, chunk numbers, or any citation markers in your answer.`;
+      const systemPrompt = `You are a helpful document assistant. Answer the user's question using the provided context excerpts and our conversation history. If neither contains enough information, say so honestly. Write in clear, natural prose — do NOT mention source names, filenames, chunk numbers, or any citation markers in your answer.`;
       // Include recent history for conversational context, but truncate long
       // assistant answers to keep the total prompt small — prefill time scales
       // linearly with input tokens, so a bloated prompt causes 15-20s TTFT delays.
