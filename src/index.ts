@@ -56,6 +56,14 @@ export default {
         response = await handleListKbs(env, user.userId);
       } else if (pathname === "/api/kbs" && method === "POST") {
         response = await handleCreateKb(request, env, user.userId);
+      } else if (pathname === "/api/warmup" && method === "POST") {
+        // Fire-and-forget: load the LLM into GPU memory on this edge node
+        // so the user's first real query doesn't hit a cold start.
+        void env.AI.run("@cf/meta/llama-3.1-8b-instruct" as any,
+          { messages: [{ role: "user", content: "hi" }], max_tokens: 1 },
+          { gateway: { id: "rag-gateway" } },
+        ).catch(() => {});
+        response = new Response(null, { status: 204 });
       }
       // ── Frontend ──────────────────────────────────────────────────
       else if (pathname === "/" || pathname === "/index.html") {

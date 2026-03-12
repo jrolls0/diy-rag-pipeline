@@ -214,6 +214,8 @@ let selectedKbId = null;
 const currentUserId = ${JSON.stringify(user.email)};
 let traceStartTime = 0;
 let traceStepIndex = 0;
+// Silently warm the LLM on this edge node so the first query doesn't cold-start
+fetch('/api/warmup', { method: 'POST' }).catch(() => {});
 (async () => { await loadKbs(); })();
 
 // =====================================================================

@@ -28,7 +28,9 @@ export async function handleQuery(request: Request, env: Env, meta: RequestMeta,
   async function step<T>(service: string, title: string, detail: string, fn: () => Promise<T>): Promise<T> {
     const t0 = performance.now();
     const result = await fn();
-    send("step", { service, title, detail, durationMs: Math.round(performance.now() - t0) } satisfies PipelineStep);
+    const ms = Math.round(performance.now() - t0);
+    console.log(`[step] ${service}: "${title}" ${ms}ms`);
+    send("step", { service, title, detail, durationMs: ms } satisfies PipelineStep);
     return result;
   }
 
@@ -63,36 +65,9 @@ export async function handleQuery(request: Request, env: Env, meta: RequestMeta,
         }),
       ]);
 
-      // ── Step 3.5 (conditional): Rewrite follow-up for retrieval ───
-      // Only fires when the question looks like it references prior context
-      // (pronouns, short questions, etc.). Self-contained questions like
-      // "Tell me about ZTNA" skip this entirely, saving 3–8s per request.
-      let retrievalQuery = question;
-      if (history.length > 0 && looksLikeFollowUp(question)) {
-        await step("Workers AI", "Rewrite follow-up for retrieval", "Follow-up question rewritten into a standalone query using conversation context so vector search finds the right documents.", async () => {
-          const rewriteResult: any = await env.AI.run("@cf/meta/llama-3.1-8b-instruct" as any, {
-            messages: [
-              {
-                role: "system",
-                content: "Given the conversation history and a follow-up question, rewrite the follow-up into a fully self-contained question that includes all necessary context. Return ONLY the rewritten question — no explanation, no preamble, no quotes.",
-              },
-              ...history.slice(-6).map((m) => ({ role: m.role, content: m.content })),
-              {
-                role: "user",
-                content: `Follow-up question: ${question}\n\nRewritten standalone question:`,
-              },
-            ],
-            max_tokens: 128,
-          }, { gateway: { id: "rag-gateway" } });
-          const rewritten = (rewriteResult.response ?? "").trim().replace(/^["']|["']$/g, "");
-          if (rewritten.length > 5 && rewritten !== question) {
-            retrievalQuery = rewritten;
-            // Re-embed with the rewritten, context-rich query for better retrieval
-            const reEmbedResult: any = await env.AI.run("@cf/baai/bge-base-en-v1.5" as any, { text: [retrievalQuery] }, { gateway: { id: "rag-gateway" } });
-            questionVector = Array.from(reEmbedResult.data[0] as number[]);
-          }
-        });
-      }
+      // questionVector was embedded from the original question in the parallel
+      // step above. Conversation continuity is handled by historyMessages passed
+      // to the LLM — no extra LLM rewrite call needed.
 
       // ── Step 5: Semantic search in Vectorize ──────────────────────
       let rankedChunks: RankedChunk[] = [];
@@ -140,7 +115,7 @@ export async function handleQuery(request: Request, env: Env, meta: RequestMeta,
             ...historyMessages,
             { role: "user", content: userPrompt },
           ],
-          max_tokens: 1024,
+          max_tokens: 700,
           stream: true,
         }, { gateway: { id: "rag-gateway" } });
 
@@ -211,18 +186,6 @@ export async function handleQuery(request: Request, env: Env, meta: RequestMeta,
   });
 }
 
-// ── Follow-up detection heuristic ──────────────────────────────────────
-// Returns true when the question appears to reference prior conversation
-// context, warranting an LLM rewrite before retrieval. Self-contained
-// questions bypass the rewrite step entirely to avoid the extra LLM round-trip.
-function looksLikeFollowUp(question: string): boolean {
-  const lower = question.toLowerCase().trim();
-  // Very short questions almost always reference something said previously
-  if (lower.split(/\s+/).length <= 3) return true;
-  // Explicit back-reference pronouns and common follow-up phrases
-  return /\b(it|its|that|this|these|those|they|them|their|above|previous|mentioned|what about|how about|tell me more|why is it|how does it|what does it|can you elaborate|explain more)\b/.test(lower);
-}
-
 // ── Vectorize path ──────────────────────────────────────────────────────
 
 interface RankedChunk {
@@ -266,10 +229,21 @@ async function tryVectorize(
       .map((m) => ({ chunk: chunkMap.get(m.id), score: m.score }))
       .filter((x) => x.chunk !== undefined) as RankedChunk[];
 
-    // If all matches were orphaned, clean them up
+    // If no results for this KB, check if the vectors are true orphans
+    // (not in D1 at all) vs. just belonging to a different KB.
+    // IMPORTANT: never delete vectors that belong to other KBs.
     if (ranked.length === 0) {
-      const orphanIds = vectorMatches.matches.map((m) => m.id);
-      try { await env.VECTORIZE.deleteByIds(orphanIds); } catch (_) {}
+      const allIds = vectorMatches.matches.map((m) => m.id);
+      const placeholders2 = allIds.map(() => "?").join(", ");
+      const existing = await env.DB.prepare(
+        `SELECT id FROM chunks WHERE id IN (${placeholders2})`,
+      ).bind(...allIds).all<{ id: string }>();
+      const existingIds = new Set(existing.results.map((r) => r.id));
+      const orphanIds = allIds.filter((id) => !existingIds.has(id));
+      if (orphanIds.length > 0) {
+        console.log(`[vectorize] Deleting ${orphanIds.length} true orphan vectors`);
+        try { await env.VECTORIZE.deleteByIds(orphanIds); } catch (_) {}
+      }
     }
 
     return ranked;
