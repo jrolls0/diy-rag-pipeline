@@ -155,12 +155,17 @@ export async function handleQuery(request: Request, env: Env, meta: RequestMeta,
         if (!answer) answer = "Sorry, I could not generate an answer.";
       });
 
-      // Persist the new exchange to the session DO (fire-and-forget is fine)
+      // Persist the new exchange to the session DO — must await to guarantee
+      // the messages are saved before the Writer closes and the Worker terminates.
+      // Using void here previously caused messages to silently drop, breaking
+      // conversation history (LLM couldn't see prior exchanges).
       const sessionName = `${user.userId}::${kbId}`;
       const doId = env.USER_SESSION.idFromName(sessionName);
       const session = env.USER_SESSION.get(doId);
-      void session.fetch("https://do/message", { method: "POST", body: JSON.stringify({ role: "user", content: question }) });
-      void session.fetch("https://do/message", { method: "POST", body: JSON.stringify({ role: "assistant", content: answer }) });
+      await Promise.all([
+        session.fetch("https://do/message", { method: "POST", body: JSON.stringify({ role: "user", content: question }) }),
+        session.fetch("https://do/message", { method: "POST", body: JSON.stringify({ role: "assistant", content: answer }) }),
+      ]);
 
       // ── Step 8: Answer + sources returned ─────────────────────────
       send("step", { service: "Worker", title: "Return response to browser", detail: "Final answer and source citations sent back to the user.", durationMs: 0 });
