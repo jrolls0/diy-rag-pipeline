@@ -118,10 +118,10 @@ export async function handleQuery(request: Request, env: Env, meta: RequestMeta,
 
       // ── Step 7: Grounded answer generated (streamed token-by-token) ──
       const contextBlock = rankedChunks
-        .map((r, i) => `[${i + 1}]\n${r.chunk.text}`)
+        .map((r, i) => `[Source ${i + 1} — ${r.chunk.filename}, chunk ${r.chunk.chunk_index}]\n${r.chunk.text}`)
         .join("\n\n---\n\n");
 
-      const systemPrompt = `You are a helpful document assistant. Answer the user's question based ONLY on the provided context excerpts. Be concise and direct. Write naturally — do NOT mention filenames, chunk numbers, or "Source N" labels. When you use information from a specific excerpt, place a small inline citation like [1] or [2] immediately after that sentence. Do NOT add a References or Sources section at the end. If the context does not contain enough information, say so briefly.`;
+      const systemPrompt = `You are a helpful document assistant. Answer the user's question based ONLY on the provided context excerpts. When you use information from a source, cite it inline using only its number like [1] or [2]. Do not mention filenames, chunk numbers, or any other source details — just the bracketed number. If the context does not contain enough information to answer, say so honestly.`;
       // Include the last few history turns so the LLM has conversational context
       const historyMessages = history.slice(-10).map((m) => ({ role: m.role, content: m.content }));
       const userPrompt = `Context:\n${contextBlock}\n\n---\n\nQuestion: ${question}`;

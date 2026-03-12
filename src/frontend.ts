@@ -586,9 +586,10 @@ async function handleAsk(e) {
     var h = '<div class="mt-3 pt-2 border-t border-gray-200">';
     h += '<p class="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-1.5">Sources</p>';
     sources.forEach(function(s, i) {
+      var preview = s.text_snippet ? s.text_snippet.trim().split(/\s+/).slice(0, 8).join(' ') + '\u2026' : s.filename;
       h += '<details class="text-[11px] text-gray-500 mb-1">' +
         '<summary class="cursor-pointer hover:text-gray-700 transition">' +
-          '<span class="font-medium text-cf-orange">[' + (i+1) + ']</span> ' + esc(s.filename) + ' &middot; chunk ' + s.chunk_index +
+          '<span class="font-medium text-cf-orange">[' + (i+1) + ']</span> ' + esc(s.filename) + ' &middot; <em class="text-gray-400">' + esc(preview) + '</em>' +
         '</summary>' +
         '<p class="mt-1 ml-4 text-gray-400 whitespace-pre-wrap text-[10px] leading-relaxed">' + esc(s.text_snippet) + '</p>' +
       '</details>';
@@ -613,26 +614,26 @@ async function handleAsk(e) {
           // First token — swap out the thinking bubble for a live streaming one
           removeMessage(thinkId);
           streamingMsgId = appendMessage('assistant',
-            '<div class="answer-text" id="stream-content"></div><span class="cursor-blink"></span>');
+            '<span id="stream-content"></span><span class="cursor-blink"></span>');
         }
         streamingText += t.token;
-        // Apply formatting live on every token so markdown renders as it streams
+        // Update as plain text while streaming (fast + safe)
         var contentEl = document.getElementById('stream-content');
         if (contentEl) {
-          contentEl.innerHTML = formatAnswer(streamingText);
+          contentEl.textContent = streamingText;
+          // Keep chat scrolled to bottom as tokens arrive
           var msgs = document.getElementById('chat-messages');
           msgs.scrollTop = msgs.scrollHeight;
         }
       },
       done: function(d) {
         if (streamingMsgId) {
-          // Answer already formatted live — remove cursor, append sources
+          // Replace the raw streamed text with properly formatted HTML + sources
           var el = document.getElementById(streamingMsgId);
           if (el) {
-            var cur = el.querySelector('.cursor-blink');
-            if (cur) cur.remove();
-            var src = buildSourcesHtml(d.sources);
-            if (src) document.getElementById('stream-content').insertAdjacentHTML('afterend', src);
+            el.querySelector('div').innerHTML =
+              '<div class="answer-text">' + formatAnswer(streamingText) + '</div>' +
+              buildSourcesHtml(d.sources);
           }
           streamingMsgId = null;
           streamingText = '';
