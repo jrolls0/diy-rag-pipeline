@@ -84,20 +84,12 @@ export function getHtml(user: UserContext): string {
     <aside class="w-72 flex flex-col border-r border-cf-border bg-white flex-shrink-0">
       <!-- ── KB selector ──────────────────────────────────────────── -->
       <div class="px-4 pt-4 pb-3 border-b border-cf-border">
-        <div class="flex items-center justify-between mb-2.5">
-          <h2 class="text-xs font-semibold uppercase tracking-widest text-cf-muted">Knowledge Library</h2>
-          <button onclick="showCreateKbForm()" id="new-kb-btn"
-                  class="text-[11px] font-semibold text-cf-orange hover:text-cf-orangeLight transition flex items-center gap-1">
-            <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg>
-            New
-          </button>
-        </div>
-        <select id="kb-select" onchange="selectKb(this.value)"
-                class="w-full text-sm border border-cf-border rounded-lg px-2.5 py-2 bg-white focus:outline-none focus:border-cf-orange text-cf-dark cursor-pointer font-medium">
-          <option value="">Loading…</option>
-        </select>
-        <!-- Create KB inline form -->
+        <h2 class="text-xs font-semibold uppercase tracking-widest text-cf-muted mb-3">Knowledge Library</h2>
+        <!-- Grouped KB list rendered by renderKbs() -->
+        <div id="kb-list" class="space-y-0.5"></div>
+        <!-- Create KB inline form (hidden by default) -->
         <div id="create-kb-form" class="hidden mt-2">
+          <p class="text-[10px] text-cf-muted mb-1.5">Shared KBs are visible and writable by everyone.</p>
           <input id="kb-name-input" type="text" placeholder="e.g. Engineering Docs"
                  class="w-full text-xs border border-cf-border rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-cf-orange"
                  onkeydown="if(event.key==='Enter')createKb()" />
@@ -259,21 +251,57 @@ async function loadKbs() {
 }
 
 function renderKbs() {
-  var sel = document.getElementById('kb-select');
+  var list = document.getElementById('kb-list');
   if (kbs.length === 0) {
-    sel.innerHTML = '<option value="">No knowledge bases — create one ↑</option>';
+    list.innerHTML = '<p class="text-xs text-gray-400 text-center py-2">No knowledge bases yet.</p>';
     return;
   }
-  sel.innerHTML = kbs.map(function(kb) {
-    return '<option value="' + esc(kb.id) + '">' + esc(kb.name) + '</option>';
-  }).join('');
-  if (selectedKbId) sel.value = selectedKbId;
+
+  var myKbs = kbs.filter(function(kb) { return kb.is_personal === 1; });
+  var sharedKbs = kbs.filter(function(kb) { return kb.is_personal === 0; });
+
+  function kbRow(kb) {
+    var isActive = kb.id === selectedKbId;
+    return '<button onclick="selectKb(\'' + kb.id + '\')"
+      class="w-full text-left px-2.5 py-2 rounded-lg text-xs transition-all flex items-center justify-between ' +
+      (isActive ? 'bg-orange-50 text-cf-orange font-semibold border border-orange-200' : 'text-cf-dark hover:bg-gray-50 border border-transparent') + '">' +
+      '<span class="truncate">' + esc(kb.name) + '</span>' +
+      (isActive ? '<span class="text-[10px] font-medium ml-1 flex-shrink-0 opacity-70">active</span>' : '') +
+    '</button>';
+  }
+
+  var html = '';
+
+  if (myKbs.length > 0) {
+    html += '<div class="mb-2">';
+    html += '<div class="flex items-center gap-1 px-1 mb-1">';
+    html += '<svg class="w-3 h-3 text-gray-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z"/></svg>';
+    html += '<span class="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Mine (private)</span>';
+    html += '</div>';
+    html += myKbs.map(kbRow).join('');
+    html += '</div>';
+  }
+
+  if (sharedKbs.length > 0) {
+    html += '<div class="mb-2">';
+    html += '<div class="flex items-center gap-1 px-1 mb-1">';
+    html += '<svg class="w-3 h-3 text-gray-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a3 3 0 00-4.681 2.72 8.986 8.986 0 003.74.477m.94-3.197a5.971 5.971 0 00-.94 3.197M15 6.75a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z"/></svg>';
+    html += '<span class="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Shared (everyone)</span>';
+    html += '</div>';
+    html += sharedKbs.map(kbRow).join('');
+    html += '</div>';
+  }
+
+  html += '<button onclick="showCreateKbForm()" id="new-kb-btn" class="w-full mt-1 text-[11px] font-semibold text-cf-orange border border-dashed border-orange-200 rounded-lg py-1.5 hover:bg-orange-50 transition flex items-center justify-center gap-1">';
+  html += '<svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg>';
+  html += ' New shared KB</button>';
+
+  list.innerHTML = html;
 }
 
 async function selectKb(kbId) {
   selectedKbId = kbId;
-  var sel = document.getElementById('kb-select');
-  if (sel) sel.value = kbId;
+  renderKbs();
   // Reset chat when switching KBs so context doesn't bleed across
   document.getElementById('chat-messages').innerHTML =
     '<div id="chat-placeholder" class="flex flex-col items-center justify-center h-full text-center">' +
