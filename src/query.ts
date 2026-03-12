@@ -40,27 +40,35 @@ export async function handleQuery(request: Request, env: Env, meta: RequestMeta,
       send("meta", meta);
       send("step", { service: "Worker", title: `Request received at ${meta.colo} PoP`, detail: `Request handled by a serverless function at the nearest edge node.`, durationMs: Math.round(performance.now() - t0) });
 
-      // ── Step 2: Session loaded from Durable Object ─────────────────
-      // Each user×KB pair gets its own DO instance for isolated history.
-      let history: Message[] = [];
-      await step("Durable Object", "Load session state", "Conversation history loaded from a persistent, single-threaded session object.", async () => {
-        const sessionName = `${user.userId}::${kbId}`;
-        const doId = env.USER_SESSION.idFromName(sessionName);
-        const session = env.USER_SESSION.get(doId);
-        const res = await session.fetch("https://do/history");
-        history = (await res.json()) as Message[];
-      });
-
       // ── Step 3: Routed through AI Gateway ─────────────────────────
       send("step", { service: "AI Gateway", title: "Route AI request", detail: "AI request passed through CF AI Gateway for logging, caching, and rate limiting.", durationMs: 0 });
 
-      // ── Step 3.5: Rewrite follow-up into standalone query ─────────
-      // Follow-up questions like "what do you mean by that?" are too vague
-      // to retrieve relevant chunks on their own. If there's prior history,
-      // ask the LLM to expand the question into a self-contained retrieval query.
-      // The original question is still used in the final answer prompt.
+      // ── Steps 2 + 4 in parallel: DO history fetch and embedding ───
+      // Neither depends on the other — running them concurrently saves
+      // ~200–400ms on every single request regardless of follow-up status.
+      let history: Message[] = [];
+      let questionVector!: number[];
+
+      await Promise.all([
+        step("Durable Object", "Load session state", "Conversation history loaded from a persistent, single-threaded session object.", async () => {
+          const sessionName = `${user.userId}::${kbId}`;
+          const doId = env.USER_SESSION.idFromName(sessionName);
+          const session = env.USER_SESSION.get(doId);
+          const res = await session.fetch("https://do/history");
+          history = (await res.json()) as Message[];
+        }),
+        step("Workers AI", "Convert question to vector via CF AI", "Question text converted into a semantic search vector using bge-base-en-v1.5 on CF Workers AI.", async () => {
+          const embeddingResult: any = await env.AI.run("@cf/baai/bge-base-en-v1.5" as any, { text: [question] }, { gateway: { id: "rag-gateway" } });
+          questionVector = Array.from(embeddingResult.data[0] as number[]);
+        }),
+      ]);
+
+      // ── Step 3.5 (conditional): Rewrite follow-up for retrieval ───
+      // Only fires when the question looks like it references prior context
+      // (pronouns, short questions, etc.). Self-contained questions like
+      // "Tell me about ZTNA" skip this entirely, saving 3–8s per request.
       let retrievalQuery = question;
-      if (history.length > 0) {
+      if (history.length > 0 && looksLikeFollowUp(question)) {
         await step("Workers AI", "Rewrite follow-up for retrieval", "Follow-up question rewritten into a standalone query using conversation context so vector search finds the right documents.", async () => {
           const rewriteResult: any = await env.AI.run("@cf/meta/llama-3.1-8b-instruct" as any, {
             messages: [
@@ -77,16 +85,14 @@ export async function handleQuery(request: Request, env: Env, meta: RequestMeta,
             max_tokens: 128,
           }, { gateway: { id: "rag-gateway" } });
           const rewritten = (rewriteResult.response ?? "").trim().replace(/^["']|["']$/g, "");
-          if (rewritten.length > 5) retrievalQuery = rewritten;
+          if (rewritten.length > 5 && rewritten !== question) {
+            retrievalQuery = rewritten;
+            // Re-embed with the rewritten, context-rich query for better retrieval
+            const reEmbedResult: any = await env.AI.run("@cf/baai/bge-base-en-v1.5" as any, { text: [retrievalQuery] }, { gateway: { id: "rag-gateway" } });
+            questionVector = Array.from(reEmbedResult.data[0] as number[]);
+          }
         });
       }
-
-      // ── Step 4: Question embedded by Workers AI ───────────────────
-      let questionVector!: number[];
-      await step("Workers AI", "Convert question to vector via CF AI", "Question text converted into a semantic search vector using bge-base-en-v1.5 on CF Workers AI.", async () => {
-        const embeddingResult: any = await env.AI.run("@cf/baai/bge-base-en-v1.5" as any, { text: [retrievalQuery] }, { gateway: { id: "rag-gateway" } });
-        questionVector = Array.from(embeddingResult.data[0] as number[]);
-      });
 
       // ── Step 5: Semantic search in Vectorize ──────────────────────
       let rankedChunks: RankedChunk[] = [];
@@ -203,6 +209,18 @@ export async function handleQuery(request: Request, env: Env, meta: RequestMeta,
       "Access-Control-Allow-Origin": "*",
     },
   });
+}
+
+// ── Follow-up detection heuristic ──────────────────────────────────────
+// Returns true when the question appears to reference prior conversation
+// context, warranting an LLM rewrite before retrieval. Self-contained
+// questions bypass the rewrite step entirely to avoid the extra LLM round-trip.
+function looksLikeFollowUp(question: string): boolean {
+  const lower = question.toLowerCase().trim();
+  // Very short questions almost always reference something said previously
+  if (lower.split(/\s+/).length <= 3) return true;
+  // Explicit back-reference pronouns and common follow-up phrases
+  return /\b(it|its|that|this|these|those|they|them|their|above|previous|mentioned|what about|how about|tell me more|why is it|how does it|what does it|can you elaborate|explain more)\b/.test(lower);
 }
 
 // ── Vectorize path ──────────────────────────────────────────────────────
