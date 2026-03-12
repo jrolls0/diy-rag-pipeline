@@ -103,8 +103,15 @@ export async function handleQuery(request: Request, env: Env, meta: RequestMeta,
         .join("\n\n---\n\n");
 
       const systemPrompt = `You are a helpful document assistant. Answer the user's question based ONLY on the provided context excerpts. If the context does not contain enough information to answer, say so honestly. Write in clear, natural prose — do NOT mention source names, filenames, chunk numbers, or any citation markers in your answer.`;
-      // Include the last few history turns so the LLM has conversational context
-      const historyMessages = history.slice(-10).map((m) => ({ role: m.role, content: m.content }));
+      // Include recent history for conversational context, but truncate long
+      // assistant answers to keep the total prompt small — prefill time scales
+      // linearly with input tokens, so a bloated prompt causes 15-20s TTFT delays.
+      const historyMessages = history.slice(-6).map((m) => ({
+        role: m.role,
+        content: m.role === "assistant" && m.content.length > 300
+          ? m.content.slice(0, 300) + "…"
+          : m.content,
+      }));
       const userPrompt = `Context:\n${contextBlock}\n\n---\n\nQuestion: ${question}`;
 
       let answer = "";
