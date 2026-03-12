@@ -262,12 +262,9 @@ function renderKbs() {
 
   function kbRow(kb) {
     var isActive = kb.id === selectedKbId;
-    return '<button onclick="selectKb(\'' + kb.id + '\')"
-      class="w-full text-left px-2.5 py-2 rounded-lg text-xs transition-all flex items-center justify-between ' +
-      (isActive ? 'bg-orange-50 text-cf-orange font-semibold border border-orange-200' : 'text-cf-dark hover:bg-gray-50 border border-transparent') + '">' +
-      '<span class="truncate">' + esc(kb.name) + '</span>' +
-      (isActive ? '<span class="text-[10px] font-medium ml-1 flex-shrink-0 opacity-70">active</span>' : '') +
-    '</button>';
+    var cls = isActive ? 'bg-orange-50 text-cf-orange font-semibold border border-orange-200' : 'text-cf-dark hover:bg-gray-50 border border-transparent';
+    var badge = isActive ? '<span class="text-[10px] font-medium ml-1 flex-shrink-0 opacity-70">active</span>' : '';
+    return '<button onclick="selectKb(\'' + kb.id + '\')" class="w-full text-left px-2.5 py-2 rounded-lg text-xs transition-all flex items-center justify-between ' + cls + '">' + '<span class="truncate">' + esc(kb.name) + '</span>' + badge + '</button>';
   }
 
   var html = '';
