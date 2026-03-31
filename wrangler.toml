@@ -1,7 +1,7 @@
 name = "diy-rag-pipeline"
 main = "src/index.ts"
 compatibility_date = "2025-09-23"
-account_id = "0ad7f58c66c1a57a20e5dc53725ffc1b"
+# account_id = "<YOUR_ACCOUNT_ID>"  # Replace with your Cloudflare account ID
 
 # R2 bucket for raw file storage
 [[r2_buckets]]
@@ -12,7 +12,7 @@ bucket_name = "rag-documents"
 [[d1_databases]]
 binding = "DB"
 database_name = "rag-db"
-database_id = "6ef268dd-4899-415f-be62-76b856f38ec6"
+database_id = "<YOUR_D1_DATABASE_ID>"  # Replace after running: npx wrangler d1 create rag-db
 
 # Vectorize index for semantic search
 [[vectorize]]
