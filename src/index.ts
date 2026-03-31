@@ -2,8 +2,13 @@ import { Env, RequestMeta } from "./types";
 import { handleUpload } from "./upload";
 import { handleQuery } from "./query";
 import { handleListDocuments, handleDeleteDocument } from "./documents";
+import { handleListKbs, handleCreateKb } from "./kb";
+import { getUserFromRequest } from "./auth";
 import { getHtml } from "./frontend";
 import { getArchitectureHtml } from "./architecture";
+
+// Re-export the Durable Object class so Wrangler can register it
+export { UserSession } from "./session";
 
 /** Extract Cloudflare-specific metadata from the incoming request. */
 function getRequestMeta(request: Request): RequestMeta {
@@ -21,35 +26,40 @@ function getRequestMeta(request: Request): RequestMeta {
  * Routes requests to the appropriate handler based on method + pathname.
  */
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     const { pathname } = url;
     const method = request.method.toUpperCase();
 
-    // ── CORS headers (allow the frontend to call the API) ─────────────
+    // ── CORS preflight ─────────────────────────────────────────────
     if (method === "OPTIONS") {
       return new Response(null, { status: 204, headers: corsHeaders() });
     }
 
     const meta = getRequestMeta(request);
+    const user = getUserFromRequest(request);
 
     try {
       let response: Response;
 
       // ── API routes ────────────────────────────────────────────────
       if (pathname === "/api/upload" && method === "POST") {
-        response = await handleUpload(request, env, meta);
+        response = await handleUpload(request, env, meta, user);
       } else if (pathname === "/api/query" && method === "POST") {
-        response = await handleQuery(request, env, meta);
+        response = await handleQuery(request, env, meta, user);
       } else if (pathname === "/api/documents" && method === "GET") {
-        response = await handleListDocuments(env);
+        response = await handleListDocuments(env, url.searchParams.get("kb_id") ?? undefined);
       } else if (pathname.startsWith("/api/documents/") && method === "DELETE") {
         const docId = pathname.split("/api/documents/")[1];
         response = await handleDeleteDocument(docId, env);
+      } else if (pathname === "/api/kbs" && method === "GET") {
+        response = await handleListKbs(env, user.userId);
+      } else if (pathname === "/api/kbs" && method === "POST") {
+        response = await handleCreateKb(request, env, user.userId);
       }
       // ── Frontend ──────────────────────────────────────────────────
       else if (pathname === "/" || pathname === "/index.html") {
-        response = new Response(getHtml(), {
+        response = new Response(getHtml(user), {
           headers: { "Content-Type": "text/html; charset=utf-8" },
         });
       } else if (pathname === "/architecture") {
@@ -65,7 +75,6 @@ export default {
         );
       }
 
-      // Attach CORS headers to every response
       return addCors(response);
     } catch (err) {
       console.error("Unhandled error:", err);

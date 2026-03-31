@@ -52,17 +52,17 @@ const INFO = {
   d1: {
     title: "D1 (Serverless SQL Database)",
     desc: "A serverless SQLite database that runs at the edge. Full SQL support without managing database servers, connections, or scaling.",
-    details: ["Replaces: AWS RDS, PlanetScale, managed Postgres", "SQLite-compatible \u2014 familiar SQL syntax", "Read replicas automatically distributed globally", "Pay only for what you use, scales to zero"]
+    details: ["SQLite-compatible \u2014 familiar SQL syntax", "Read replicas automatically distributed globally", "Pay only for what you use, scales to zero"]
   },
   vectorize: {
     title: "Vectorize (Vector Database)",
     desc: "A purpose-built vector database for AI search. Stores embeddings and finds similar content by meaning, not just keywords.",
-    details: ["Replaces: Pinecone, Weaviate, pgvector", "Optimized for semantic / similarity search", "Native integration with Workers AI embeddings", "Cosine similarity with sub-second query times"]
+    details: ["Optimized for semantic / similarity search", "Native integration with Workers AI embeddings", "Cosine similarity with sub-second query times"]
   },
   ai: {
     title: "Workers AI (Serverless Inference)",
     desc: "Run AI models directly on Cloudflare's GPU network. No API keys, no external providers \u2014 inference runs at the edge, close to users.",
-    details: ["Replaces: OpenAI API, AWS Bedrock, self-hosted GPUs", "Embedding model: bge-base-en-v1.5 (search vectors)", "Answer model: Llama 3.1 8B Instruct (text generation)", "Pay-per-token, no minimum commitment"]
+    details: ["Embedding model: bge-base-en-v1.5 (search vectors)", "Answer model: Llama 3.1 8B Instruct (text generation)", "Pay-per-token, no minimum commitment"]
   },
   gateway: {
     title: "AI Gateway (Observability)",
@@ -72,7 +72,7 @@ const INFO = {
   do: {
     title: "Durable Objects (Stateful Coordination)",
     desc: "Single-threaded, globally unique objects with built-in storage. Perfect for sessions, real-time collaboration, or any workload that needs strong consistency without a database.",
-    details: ["Replaces: Redis, WebSocket servers, session stores", "Guaranteed single-threaded \u2014 no race conditions", "Built-in SQLite storage colocated with compute", "Survives hibernation \u2014 state is never lost"]
+    details: ["Replaces: Redis", "Guaranteed single-threaded \u2014 no race conditions", "Built-in SQLite storage colocated with compute", "Survives hibernation \u2014 state is never lost"]
   }
 };
 const UPLOAD_STEPS = [

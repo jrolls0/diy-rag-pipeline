@@ -1,8 +1,10 @@
+import { UserContext } from "./types";
+
 /**
  * Returns the full single-page HTML for the RAG app.
  * Cloudflare-branded, 3-column layout for customer demos.
  */
-export function getHtml(): string {
+export function getHtml(user: UserContext): string {
   return /*html*/ `<!DOCTYPE html>
 <html lang="en" class="h-full">
 <head>
@@ -43,6 +45,8 @@ export function getHtml(): string {
     .drop-active { border-color: #f6821f !important; background: rgba(246,130,31,.06) !important; }
     @keyframes fadeSlideIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
     .step-animate { animation: fadeSlideIn .3s ease-out forwards; }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+    .cursor-blink { display:inline-block; width:2px; height:0.9em; background:#6b7280; margin-left:1px; vertical-align:text-bottom; animation:blink 0.9s step-end infinite; }
     @keyframes pulse-dot { 0%,100% { opacity: .4; } 50% { opacity: 1; } }
     .pulse-dot { animation: pulse-dot 1.2s ease-in-out infinite; }
     .answer-text p { margin-bottom: .4rem; }
@@ -62,6 +66,10 @@ export function getHtml(): string {
       </div>
     </div>
     <div class="flex items-center gap-3">
+      <span class="text-[11px] text-gray-400 border border-cf-border rounded-lg px-2.5 py-1 bg-cf-surface flex items-center gap-1.5">
+        <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z"/></svg>
+        ${user.email}
+      </span>
       <a href="/architecture" class="text-[11px] font-semibold text-cf-orange border border-cf-orange/40 rounded-lg px-3 py-1.5 hover:bg-orange-50 transition flex items-center gap-1.5">
         <svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z"/></svg>
         Architecture Map &rarr;
@@ -74,8 +82,22 @@ export function getHtml(): string {
 
     <!-- ══ LEFT: Knowledge Library ════════════════════════════════ -->
     <aside class="w-72 flex flex-col border-r border-cf-border bg-white flex-shrink-0">
-      <div class="px-4 pt-4 pb-2">
-        <h2 class="text-xs font-semibold uppercase tracking-widest text-cf-muted">Knowledge Library</h2>
+      <!-- ── KB selector ──────────────────────────────────────────── -->
+      <div class="px-4 pt-4 pb-3 border-b border-cf-border">
+        <h2 class="text-xs font-semibold uppercase tracking-widest text-cf-muted mb-3">Knowledge Library</h2>
+        <!-- Grouped KB list rendered by renderKbs() -->
+        <div id="kb-list" class="space-y-0.5"></div>
+        <!-- Create KB inline form (hidden by default) -->
+        <div id="create-kb-form" class="hidden mt-2">
+          <p class="text-[10px] text-cf-muted mb-1.5">Shared KBs are visible and writable by everyone.</p>
+          <input id="kb-name-input" type="text" placeholder="e.g. Engineering Docs"
+                 class="w-full text-xs border border-cf-border rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-cf-orange"
+                 onkeydown="if(event.key==='Enter')createKb()" />
+          <div class="flex gap-1.5 mt-1.5">
+            <button onclick="createKb()" class="flex-1 text-[11px] font-semibold bg-cf-orange text-white rounded-lg py-1 hover:bg-cf-orangeLight transition">Create</button>
+            <button onclick="hideCreateKbForm()" class="flex-1 text-[11px] font-semibold bg-gray-100 text-gray-500 rounded-lg py-1 hover:bg-gray-200 transition">Cancel</button>
+          </div>
+        </div>
       </div>
 
       <!-- Upload zone -->
@@ -99,6 +121,15 @@ export function getHtml(): string {
           <div class="spinner"></div>
           <span id="upload-bar-text" class="text-cf-muted">Processing…</span>
         </div>
+      </div>
+
+      <!-- Read-only overlay (shown when user doesn't own the selected KB) -->
+      <div id="read-only-indicator" class="mx-3 mb-3 p-4 border border-dashed border-gray-200 rounded-xl text-center hidden">
+        <div class="w-8 h-8 mx-auto mb-2 rounded-lg bg-gray-50 flex items-center justify-center">
+          <svg class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z"/></svg>
+        </div>
+        <p class="text-xs text-gray-500 font-medium">Read only</p>
+        <p id="kb-owner-label" class="text-[10px] text-gray-400 mt-0.5"></p>
       </div>
 
       <!-- Document list -->
@@ -178,9 +209,12 @@ const SVC = {
 };
 
 let documents = [];
+let kbs = [];
+let selectedKbId = null;
+const currentUserId = ${JSON.stringify(user.email)};
 let traceStartTime = 0;
 let traceStepIndex = 0;
-(async () => { await refreshDocuments(); })();
+(async () => { await loadKbs(); })();
 
 // =====================================================================
 // Panel toggle
@@ -196,6 +230,125 @@ function togglePanel() {
     panel.classList.add('hidden');
     btn.classList.remove('hidden');
   }
+}
+
+// =====================================================================
+// Knowledge Bases
+// =====================================================================
+async function loadKbs() {
+  try {
+    const res = await fetch('/api/kbs');
+    const data = await res.json();
+    kbs = data.kbs || [];
+    renderKbs();
+    if (kbs.length > 0 && !selectedKbId) {
+      await selectKb(kbs[0].id);
+    } else {
+      updateUploadZone();
+      await refreshDocuments();
+    }
+  } catch(e) { console.error('Failed to load KBs', e); }
+}
+
+function renderKbs() {
+  var list = document.getElementById('kb-list');
+  if (kbs.length === 0) {
+    list.innerHTML = '<p class="text-xs text-gray-400 text-center py-2">No knowledge bases yet.</p>';
+    return;
+  }
+
+  var myKbs = kbs.filter(function(kb) { return kb.is_personal === 1; });
+  var sharedKbs = kbs.filter(function(kb) { return kb.is_personal === 0; });
+
+  function kbRow(kb) {
+    var isActive = kb.id === selectedKbId;
+    var cls = isActive ? 'bg-orange-50 text-cf-orange font-semibold border border-orange-200' : 'text-cf-dark hover:bg-gray-50 border border-transparent';
+    var badge = isActive ? '<span class="text-[10px] font-medium ml-1 flex-shrink-0 opacity-70">active</span>' : '';
+    return '<button data-kbid="' + kb.id + '" onclick="selectKb(this.dataset.kbid)" class="w-full text-left px-2.5 py-2 rounded-lg text-xs transition-all flex items-center justify-between ' + cls + '">' + '<span class="truncate">' + esc(kb.name) + '</span>' + badge + '</button>';
+  }
+
+  var html = '';
+
+  if (myKbs.length > 0) {
+    html += '<div class="mb-2">';
+    html += '<div class="flex items-center gap-1 px-1 mb-1">';
+    html += '<svg class="w-3 h-3 text-gray-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z"/></svg>';
+    html += '<span class="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Mine (private)</span>';
+    html += '</div>';
+    html += myKbs.map(kbRow).join('');
+    html += '</div>';
+  }
+
+  if (sharedKbs.length > 0) {
+    html += '<div class="mb-2">';
+    html += '<div class="flex items-center gap-1 px-1 mb-1">';
+    html += '<svg class="w-3 h-3 text-gray-400" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M18 18.72a9.094 9.094 0 003.741-.479 3 3 0 00-4.682-2.72m.94 3.198l.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0112 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 016 18.719m12 0a5.971 5.971 0 00-.941-3.197m0 0A5.995 5.995 0 0012 12.75a5.995 5.995 0 00-5.058 2.772m0 0a3 3 0 00-4.681 2.72 8.986 8.986 0 003.74.477m.94-3.197a5.971 5.971 0 00-.94 3.197M15 6.75a3 3 0 11-6 0 3 3 0 016 0zm6 3a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0zm-13.5 0a2.25 2.25 0 11-4.5 0 2.25 2.25 0 014.5 0z"/></svg>';
+    html += '<span class="text-[10px] font-semibold uppercase tracking-wider text-gray-400">Shared (everyone)</span>';
+    html += '</div>';
+    html += sharedKbs.map(kbRow).join('');
+    html += '</div>';
+  }
+
+  html += '<button onclick="showCreateKbForm()" id="new-kb-btn" class="w-full mt-1 text-[11px] font-semibold text-cf-orange border border-dashed border-orange-200 rounded-lg py-1.5 hover:bg-orange-50 transition flex items-center justify-center gap-1">';
+  html += '<svg class="w-3 h-3" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4"/></svg>';
+  html += ' New shared KB</button>';
+
+  list.innerHTML = html;
+}
+
+async function selectKb(kbId) {
+  selectedKbId = kbId;
+  renderKbs();
+  // Reset chat when switching KBs so context doesn't bleed across
+  document.getElementById('chat-messages').innerHTML =
+    '<div id="chat-placeholder" class="flex flex-col items-center justify-center h-full text-center">' +
+      '<div class="w-14 h-14 rounded-2xl bg-orange-50 flex items-center justify-center mb-4">' +
+        '<svg class="w-7 h-7 text-cf-orange" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8.625 12a.375.375 0 11-.75 0 .375.375 0 01.75 0zm4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z"/><path stroke-linecap="round" stroke-linejoin="round" d="M12 2.25c-5.385 0-9.75 4.365-9.75 9.75s4.365 9.75 9.75 9.75 9.75-4.365 9.75-9.75S17.385 2.25 12 2.25z"/></svg>' +
+      '</div>' +
+      '<p class="text-sm text-cf-muted max-w-xs">Upload a document to this knowledge base, then ask questions about it here.</p>' +
+    '</div>';
+  updateUploadZone();
+  await refreshDocuments();
+}
+
+function updateUploadZone() {
+  var kb = kbs.find(function(k) { return k.id === selectedKbId; });
+  // Every KB in the list is writable: personal KBs are only shown to their owner,
+  // shared KBs are open to everyone.
+  var canUpload = !!kb;
+  document.getElementById('drop-zone').classList.toggle('hidden', !canUpload);
+  document.getElementById('read-only-indicator').classList.toggle('hidden', true);
+}
+
+async function createKb() {
+  var input = document.getElementById('kb-name-input');
+  var name = input.value.trim();
+  if (!name) { input.focus(); return; }
+  try {
+    var res = await fetch('/api/kbs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name }),
+    });
+    var data = await res.json();
+    if (!data.success) { alert(data.error || 'Failed to create knowledge base.'); return; }
+    input.value = '';
+    hideCreateKbForm();
+    await loadKbs();
+    await selectKb(data.kb.id);
+  } catch(e) { alert('Error: ' + e.message); }
+}
+
+function showCreateKbForm() {
+  document.getElementById('create-kb-form').classList.remove('hidden');
+  document.getElementById('new-kb-btn').classList.add('hidden');
+  setTimeout(function() { document.getElementById('kb-name-input').focus(); }, 50);
+}
+
+function hideCreateKbForm() {
+  document.getElementById('create-kb-form').classList.add('hidden');
+  document.getElementById('new-kb-btn').classList.remove('hidden');
+  document.getElementById('kb-name-input').value = '';
 }
 
 // =====================================================================
@@ -314,7 +467,8 @@ function consumeSSE(response, handlers) {
 // =====================================================================
 async function refreshDocuments() {
   try {
-    const res = await fetch('/api/documents');
+    const url = selectedKbId ? '/api/documents?kb_id=' + encodeURIComponent(selectedKbId) : '/api/documents';
+    const res = await fetch(url);
     const data = await res.json();
     documents = data.documents || [];
     renderDocuments();
@@ -367,6 +521,7 @@ async function uploadFile(file) {
 
   const form = new FormData();
   form.append('file', file);
+  if (selectedKbId) form.append('kb_id', selectedKbId);
 
   try {
     const res = await fetch('/api/upload', { method: 'POST', body: form });
@@ -419,47 +574,84 @@ async function handleAsk(e) {
   input.value = '';
   document.getElementById('ask-btn').disabled = true;
 
-  const thinkId = appendMessage('assistant', '<div class="flex items-center gap-2"><div class="spinner"></div><span class="text-gray-400 text-xs">Thinking…</span></div>');
+  var streamingMsgId = null;
+  var streamingText = '';
+
+  var thinkId = appendMessage('assistant', '<div class="flex items-center gap-2"><div class="spinner"></div><span class="text-gray-400 text-xs">Thinking…</span></div>');
   clearTrace();
   addTraceSpinner();
+
+  function buildSourcesHtml(sources) {
+    if (!sources || sources.length === 0) return '';
+    var h = '<div class="mt-3 pt-2 border-t border-gray-200">';
+    h += '<p class="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-1.5">Sources</p>';
+    sources.forEach(function(s, i) {
+      h += '<details class="text-[11px] text-gray-500 mb-1">' +
+        '<summary class="cursor-pointer hover:text-gray-700 transition">' +
+          '<span class="font-medium text-cf-orange">[' + (i+1) + ']</span> ' + esc(s.filename) + ' &middot; chunk ' + s.chunk_index +
+        '</summary>' +
+        '<p class="mt-1 ml-4 text-gray-400 whitespace-pre-wrap text-[10px] leading-relaxed">' + esc(s.text_snippet) + '</p>' +
+      '</details>';
+    });
+    h += '</div>';
+    return h;
+  }
 
   try {
     const res = await fetch('/api/query', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question }),
+      body: JSON.stringify({ question, kb_id: selectedKbId }),
     });
     removeTraceSpinner();
 
     consumeSSE(res, {
       meta: function(m) { showTraceHeader(m); },
       step: function(s) { addTraceRow(s); },
+      token: function(t) {
+        if (!streamingMsgId) {
+          // First token — swap out the thinking bubble for a live streaming one
+          removeMessage(thinkId);
+          streamingMsgId = appendMessage('assistant',
+            '<span id="stream-content" class="answer-text"></span><span class="cursor-blink"></span>');
+        }
+        streamingText += t.token;
+        // Update as plain text while streaming (fast + safe)
+        var contentEl = document.getElementById('stream-content');
+        if (contentEl) {
+          contentEl.innerHTML = formatAnswer(streamingText);
+          // Keep chat scrolled to bottom as tokens arrive
+          var msgs = document.getElementById('chat-messages');
+          msgs.scrollTop = msgs.scrollHeight;
+        }
+      },
       done: function(d) {
-        removeMessage(thinkId);
-        if (!d.success) {
-          appendMessage('assistant', '<span class="text-red-500">' + esc(d.error || 'Something went wrong.') + '</span>');
-        } else {
-          var html = '<div class="answer-text">' + formatAnswer(d.answer) + '</div>';
-          if (d.sources && d.sources.length > 0) {
-            html += '<div class="mt-3 pt-2 border-t border-gray-200">';
-            html += '<p class="text-[10px] font-semibold uppercase tracking-wider text-gray-400 mb-1.5">Sources</p>';
-            d.sources.forEach(function(s, i) {
-              html += '<details class="text-[11px] text-gray-500 mb-1">' +
-                '<summary class="cursor-pointer hover:text-gray-700 transition">' +
-                  '<span class="font-medium text-cf-orange">[' + (i+1) + ']</span> ' + esc(s.filename) + ' &middot; chunk ' + s.chunk_index +
-                '</summary>' +
-                '<p class="mt-1 ml-4 text-gray-400 whitespace-pre-wrap text-[10px] leading-relaxed">' + esc(s.text_snippet) + '</p>' +
-              '</details>';
-            });
-            html += '</div>';
+        if (streamingMsgId) {
+          // Replace the raw streamed text with properly formatted HTML + sources
+          var el = document.getElementById(streamingMsgId);
+          if (el) {
+            el.querySelector('div').innerHTML =
+              '<div class="answer-text">' + formatAnswer(streamingText) + '</div>' +
+              buildSourcesHtml(d.sources);
           }
-          appendMessage('assistant', html);
+          streamingMsgId = null;
+          streamingText = '';
+        } else {
+          // Fallback: no tokens were streamed (e.g. error before first token)
+          removeMessage(thinkId);
+          if (!d.success) {
+            appendMessage('assistant', '<span class="text-red-500">' + esc(d.error || 'Something went wrong.') + '</span>');
+          } else {
+            appendMessage('assistant',
+              '<div class="answer-text">' + formatAnswer(d.answer) + '</div>' + buildSourcesHtml(d.sources));
+          }
         }
         document.getElementById('ask-btn').disabled = false;
         input.focus();
       },
       error: function(e) {
-        removeMessage(thinkId);
+        removeMessage(streamingMsgId || thinkId);
+        streamingMsgId = null; streamingText = '';
         appendMessage('assistant', '<span class="text-red-500">Error: ' + esc(e.error) + '</span>');
         document.getElementById('ask-btn').disabled = false;
         input.focus();

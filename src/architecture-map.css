@@ -381,7 +381,24 @@ body {
   box-shadow: 0 2px 12px rgba(0,0,0,0.04);
 }
 
-/* ── Click hint ── */
+/* ── Click hint — injected above the SVG via ::before on the right column ── */
+.aop-right-col::before {
+  content: "👆 Click any component to learn more about it  ↓";
+  display: block;
+  flex-shrink: 0;
+  text-align: center;
+  font-size: 11.5px;
+  color: #b0b8c4;
+  font-style: italic;
+  letter-spacing: 0.1px;
+  animation: aop-hint-pulse 2.5s ease-in-out 0.5s 3;
+}
+
+@keyframes aop-hint-pulse {
+  0%, 100% { color: #b0b8c4; }
+  50%       { color: #f6821f; }
+}
+
 .aop-click-hint {
   text-align: center;
   font-size: 12px;

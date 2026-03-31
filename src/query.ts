@@ -1,4 +1,5 @@
-import { Env, ChunkRow, SourceCitation, PipelineStep, RequestMeta } from "./types";
+import { Env, ChunkRow, SourceCitation, PipelineStep, RequestMeta, UserContext } from "./types";
+import type { Message } from "./session";
 
 /** How many nearest-neighbour chunks to retrieve */
 const TOP_K = 5;
@@ -7,9 +8,10 @@ const TOP_K = 5;
  * Query handler using SSE so each pipeline step streams to the client
  * as it completes, enabling real-time activity panel updates.
  */
-export async function handleQuery(request: Request, env: Env, meta: RequestMeta): Promise<Response> {
-  const body = (await request.json()) as { question?: string };
+export async function handleQuery(request: Request, env: Env, meta: RequestMeta, user: UserContext): Promise<Response> {
+  const body = (await request.json()) as { question?: string; kb_id?: string };
   const question = body.question?.trim();
+  const kbId = body.kb_id?.trim() || "kb_general";
 
   if (!question) {
     return Response.json({ success: false, error: "No question provided." }, { status: 400 });
@@ -26,7 +28,9 @@ export async function handleQuery(request: Request, env: Env, meta: RequestMeta)
   async function step<T>(service: string, title: string, detail: string, fn: () => Promise<T>): Promise<T> {
     const t0 = performance.now();
     const result = await fn();
-    send("step", { service, title, detail, durationMs: Math.round(performance.now() - t0) } satisfies PipelineStep);
+    const ms = Math.round(performance.now() - t0);
+    console.log(`[step] ${service}: "${title}" ${ms}ms`);
+    send("step", { service, title, detail, durationMs: ms } satisfies PipelineStep);
     return result;
   }
 
@@ -38,31 +42,45 @@ export async function handleQuery(request: Request, env: Env, meta: RequestMeta)
       send("meta", meta);
       send("step", { service: "Worker", title: `Request received at ${meta.colo} PoP`, detail: `Request handled by a serverless function at the nearest edge node.`, durationMs: Math.round(performance.now() - t0) });
 
-      // ── Step 2: Session loaded from Durable Object ────────────────
-      send("step", { service: "Durable Object", title: "Load session state", detail: "Conversation history loaded from a persistent, single-threaded session object.", durationMs: 0 });
-
       // ── Step 3: Routed through AI Gateway ─────────────────────────
       send("step", { service: "AI Gateway", title: "Route AI request", detail: "AI request passed through CF AI Gateway for logging, caching, and rate limiting.", durationMs: 0 });
 
-      // ── Step 4: Question embedded by Workers AI ───────────────────
+      // ── Steps 2 + 4 in parallel: DO history fetch and embedding ───
+      // Neither depends on the other — running them concurrently saves
+      // ~200–400ms on every single request regardless of follow-up status.
+      let history: Message[] = [];
       let questionVector!: number[];
-      await step("Workers AI", "Convert question to vector via CF AI", "Question text converted into a semantic search vector using bge-base-en-v1.5 on CF Workers AI.", async () => {
-        const embeddingResult: any = await env.AI.run("@cf/baai/bge-base-en-v1.5" as any, { text: [question] }, { gateway: { id: "rag-gateway" } });
-        questionVector = Array.from(embeddingResult.data[0] as number[]);
-      });
+
+      await Promise.all([
+        step("Durable Object", "Load session state", "Conversation history loaded from a persistent, single-threaded session object.", async () => {
+          const sessionName = `${user.userId}::${kbId}`;
+          const doId = env.USER_SESSION.idFromName(sessionName);
+          const session = env.USER_SESSION.get(doId);
+          const res = await session.fetch("https://do/history");
+          history = (await res.json()) as Message[];
+        }),
+        step("Workers AI", "Convert question to vector via CF AI", "Question text converted into a semantic search vector using bge-base-en-v1.5 on CF Workers AI.", async () => {
+          const embeddingResult: any = await env.AI.run("@cf/baai/bge-base-en-v1.5" as any, { text: [question] });
+          questionVector = Array.from(embeddingResult.data[0] as number[]);
+        }),
+      ]);
+
+      // questionVector was embedded from the original question in the parallel
+      // step above. Conversation continuity is handled by historyMessages passed
+      // to the LLM — no extra LLM rewrite call needed.
 
       // ── Step 5: Semantic search in Vectorize ──────────────────────
       let rankedChunks: RankedChunk[] = [];
 
       const vecResult = await step("Vectorize", "Search CF vector database", "Question vector compared against all stored document vectors to find the most relevant content.", async () => {
-        return tryVectorize(questionVector, env);
+        return tryVectorize(questionVector, kbId, env);
       });
 
       if (vecResult.length > 0) {
         rankedChunks = vecResult;
       } else {
         rankedChunks = await step("D1", "Search CF database (fallback)", "Cosine similarity computed directly across stored embeddings.", async () => {
-          return d1CosineFallback(questionVector, env);
+          return d1CosineFallback(questionVector, kbId, env);
         });
       }
 
@@ -79,30 +97,85 @@ export async function handleQuery(request: Request, env: Env, meta: RequestMeta)
       // ── Step 6: Chunk text fetched from D1 ────────────────────────
       send("step", { service: "D1", title: "Fetch source text from CF database", detail: `Full text of ${rankedChunks.length} matching chunk${rankedChunks.length > 1 ? "s" : ""} retrieved from CF D1 edge database.`, durationMs: 0 });
 
-      // ── Step 7: Grounded answer generated ─────────────────────────
+      // ── Step 7: Grounded answer generated (streamed token-by-token) ──
       const contextBlock = rankedChunks
         .map((r, i) => `[Source ${i + 1} — ${r.chunk.filename}, chunk ${r.chunk.chunk_index}]\n${r.chunk.text}`)
         .join("\n\n---\n\n");
 
-      const systemPrompt = `You are a helpful document assistant. Answer the user's question based ONLY on the provided context excerpts. If the context does not contain enough information to answer, say so honestly. Always reference which source(s) you used.`;
-      const userPrompt = `Context:\n${contextBlock}\n\n---\n\nQuestion: ${question}`;
+      const systemPrompt = `You are a helpful document assistant. Answer the user's question using the provided context excerpts and the conversation history. If neither contains enough information, say so honestly. Write in clear, natural prose — do NOT mention source names, filenames, chunk numbers, or any citation markers in your answer.`;
+
+      // Build conversation history block — placed right before the question
+      // in the user prompt so the 8B model can't lose track of it among chunks.
+      // Truncate assistant messages to 300 chars to keep prompt small.
+      let conversationBlock = "";
+      if (history.length > 0) {
+        const recent = history.slice(-6);
+        conversationBlock = "Conversation history:\n" + recent.map((m) => {
+          const label = m.role === "user" ? "User" : "Assistant";
+          const text = m.role === "assistant" && m.content.length > 300
+            ? m.content.slice(0, 300) + "…"
+            : m.content;
+          return `${label}: ${text}`;
+        }).join("\n") + "\n\n---\n\n";
+      }
+
+      const userPrompt = `Context:\n${contextBlock}\n\n---\n\n${conversationBlock}Question: ${question}`;
 
       let answer = "";
-      await step("Workers AI", "Generate AI response at the edge", "Retrieved context sent to Llama 3.1 8B on CF Workers AI to produce a grounded answer.", async () => {
-        const llmResult: any = await env.AI.run("@cf/meta/llama-3.1-8b-instruct" as any, {
+      await step("Workers AI", "Stream AI response at the edge", "Llama 3.1 8B streams the answer token-by-token from CF Workers AI back to the browser.", async () => {
+        const llmStream: any = await env.AI.run("@cf/meta/llama-3.1-8b-instruct" as any, {
           messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: userPrompt },
           ],
-          max_tokens: 1024,
+          max_tokens: 700,
+          stream: true,
         }, { gateway: { id: "rag-gateway" } });
-        answer = llmResult.response ?? llmResult.result?.response ?? "Sorry, I could not generate an answer.";
+
+        // Workers AI returns a ReadableStream of SSE-formatted lines when stream:true
+        const reader = (llmStream as ReadableStream<Uint8Array>).getReader();
+        const decoder = new TextDecoder();
+        let remainder = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          // Decode and split on newlines; keep any incomplete line as remainder
+          const chunk = remainder + decoder.decode(value, { stream: true });
+          const lines = chunk.split("\n");
+          remainder = lines.pop() ?? "";
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            const payload = line.slice(6).trim();
+            if (payload === "[DONE]") break;
+            try {
+              const parsed = JSON.parse(payload) as { response?: string };
+              if (parsed.response) {
+                answer += parsed.response;
+                send("token", { token: parsed.response });
+              }
+            } catch { /* incomplete JSON in this line, skip */ }
+          }
+        }
+
+        if (!answer) answer = "Sorry, I could not generate an answer.";
       });
+
+      // Persist the new exchange to the session DO — must await to guarantee
+      // the messages are saved before the Writer closes and the Worker terminates.
+      // Using void here previously caused messages to silently drop, breaking
+      // conversation history (LLM couldn't see prior exchanges).
+      const sessionName = `${user.userId}::${kbId}`;
+      const doId = env.USER_SESSION.idFromName(sessionName);
+      const session = env.USER_SESSION.get(doId);
+      await Promise.all([
+        session.fetch("https://do/message", { method: "POST", body: JSON.stringify({ role: "user", content: question }) }),
+        session.fetch("https://do/message", { method: "POST", body: JSON.stringify({ role: "assistant", content: answer }) }),
+      ]);
 
       // ── Step 8: Answer + sources returned ─────────────────────────
       send("step", { service: "Worker", title: "Return response to browser", detail: "Final answer and source citations sent back to the user.", durationMs: 0 });
 
-      // ── 5. Build source citations + return ────────────────────────
       const sources: SourceCitation[] = rankedChunks.map((r) => ({
         document_id: r.chunk.document_id,
         filename: r.chunk.filename,
@@ -140,11 +213,13 @@ interface RankedChunk {
 
 async function tryVectorize(
   questionVector: number[],
+  kbId: string,
   env: Env,
 ): Promise<RankedChunk[]> {
   try {
+    // Fetch extra matches so we still hit TOP_K after filtering by KB
     const vectorMatches = await env.VECTORIZE.query(questionVector, {
-      topK: TOP_K,
+      topK: TOP_K * 3,
       returnMetadata: "all",
     });
 
@@ -155,13 +230,15 @@ async function tryVectorize(
     const chunkIds = vectorMatches.matches.map((m) => m.id);
     const placeholders = chunkIds.map(() => "?").join(", ");
 
+    // Filter by kb_id in the JOIN so results are scoped to the selected KB
     const chunkResults = await env.DB.prepare(
       `SELECT c.id, c.document_id, c.chunk_index, c.text, d.filename
        FROM chunks c
        JOIN documents d ON d.id = c.document_id
-       WHERE c.id IN (${placeholders})`,
+       WHERE c.id IN (${placeholders})
+         AND d.kb_id = ?`,
     )
-      .bind(...chunkIds)
+      .bind(...chunkIds, kbId)
       .all<ChunkRow & { filename: string }>();
 
     const chunkMap = new Map(chunkResults.results.map((r) => [r.id, r]));
@@ -170,10 +247,21 @@ async function tryVectorize(
       .map((m) => ({ chunk: chunkMap.get(m.id), score: m.score }))
       .filter((x) => x.chunk !== undefined) as RankedChunk[];
 
-    // If all matches were orphaned, clean them up
+    // If no results for this KB, check if the vectors are true orphans
+    // (not in D1 at all) vs. just belonging to a different KB.
+    // IMPORTANT: never delete vectors that belong to other KBs.
     if (ranked.length === 0) {
-      const orphanIds = vectorMatches.matches.map((m) => m.id);
-      try { await env.VECTORIZE.deleteByIds(orphanIds); } catch (_) {}
+      const allIds = vectorMatches.matches.map((m) => m.id);
+      const placeholders2 = allIds.map(() => "?").join(", ");
+      const existing = await env.DB.prepare(
+        `SELECT id FROM chunks WHERE id IN (${placeholders2})`,
+      ).bind(...allIds).all<{ id: string }>();
+      const existingIds = new Set(existing.results.map((r) => r.id));
+      const orphanIds = allIds.filter((id) => !existingIds.has(id));
+      if (orphanIds.length > 0) {
+        console.log(`[vectorize] Deleting ${orphanIds.length} true orphan vectors`);
+        try { await env.VECTORIZE.deleteByIds(orphanIds); } catch (_) {}
+      }
     }
 
     return ranked;
@@ -194,14 +282,16 @@ async function tryVectorize(
  */
 async function d1CosineFallback(
   questionVector: number[],
+  kbId: string,
   env: Env,
 ): Promise<RankedChunk[]> {
   const rows = await env.DB.prepare(
     `SELECT c.id, c.document_id, c.chunk_index, c.text, c.embedding, d.filename
      FROM chunks c
      JOIN documents d ON d.id = c.document_id
-     WHERE c.embedding IS NOT NULL`,
-  ).all<ChunkRow & { filename: string; embedding: string }>();
+     WHERE c.embedding IS NOT NULL
+       AND d.kb_id = ?`,
+  ).bind(kbId).all<ChunkRow & { filename: string; embedding: string }>();
 
   if (!rows.results || rows.results.length === 0) return [];
 

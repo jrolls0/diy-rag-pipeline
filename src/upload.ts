@@ -1,4 +1,4 @@
-import { Env, PipelineStep, RequestMeta } from "./types";
+import { Env, PipelineStep, RequestMeta, UserContext } from "./types";
 import { generateId, extractTextFromFile, chunkText, estimateTokens } from "./utils";
 
 const ALLOWED_TYPES = new Set([
@@ -10,7 +10,7 @@ const ALLOWED_TYPES = new Set([
  * Upload handler using SSE so each pipeline step streams to the client
  * as it completes, enabling real-time activity panel updates.
  */
-export async function handleUpload(request: Request, env: Env, meta: RequestMeta): Promise<Response> {
+export async function handleUpload(request: Request, env: Env, meta: RequestMeta, user: UserContext): Promise<Response> {
   const { readable, writable } = new TransformStream();
   const writer = writable.getWriter();
   const encoder = new TextEncoder();
@@ -37,6 +37,24 @@ export async function handleUpload(request: Request, env: Env, meta: RequestMeta
       const file = formData.get("file") as File | null;
 
       if (!file) { send("error", { error: "No file provided." }); writer.close(); return; }
+
+      // ── Resolve target knowledge base ─────────────────────────────
+      const kbId = (formData.get("kb_id") as string | null)?.trim() || "kb_general";
+
+      // Verify the knowledge base exists
+      const kb = await env.DB.prepare(
+        `SELECT id, owner_id, is_personal FROM knowledge_bases WHERE id = ?`,
+      ).bind(kbId).first<{ id: string; owner_id: string; is_personal: number }>();
+
+      if (!kb) {
+        send("error", { error: "Knowledge base not found." });
+        writer.close(); return;
+      }
+      // Personal KBs are private — only the owner can upload to them
+      if (kb.is_personal === 1 && kb.owner_id !== user.userId) {
+        send("error", { error: "You can only upload to your own personal knowledge base." });
+        writer.close(); return;
+      }
 
       let mimeType = file.type || "text/plain";
       if (file.name.endsWith(".md") || file.name.endsWith(".markdown")) mimeType = "text/markdown";
@@ -83,8 +101,8 @@ export async function handleUpload(request: Request, env: Env, meta: RequestMeta
       // ── Step 3: Metadata + chunks saved in D1 ─────────────────
       await step("D1", "Save metadata + chunks to CF database", `Document metadata and ${chunks.length} text chunk${chunks.length > 1 ? "s" : ""} written to CF D1 edge SQL database.`, async () => {
         await env.DB.prepare(
-          `INSERT INTO documents (id, filename, r2_key, size_bytes, mime_type, chunk_count) VALUES (?, ?, ?, ?, ?, ?)`,
-        ).bind(docId, file.name, r2Key, fileBuffer.byteLength, mimeType, chunks.length).run();
+          `INSERT INTO documents (id, filename, r2_key, size_bytes, mime_type, chunk_count, user_id, kb_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).bind(docId, file.name, r2Key, fileBuffer.byteLength, mimeType, chunks.length, user.userId, kbId).run();
 
         // We'll update embeddings after they're generated
         const chunkStmts = rawChunks.map((c) =>
@@ -122,7 +140,7 @@ export async function handleUpload(request: Request, env: Env, meta: RequestMeta
       // ── Step 6: Vectors indexed in Vectorize ───────────────────
       await step("Vectorize", "Index in CF vector database", "Embedding vectors inserted into CF Vectorize so documents can be found by meaning, not just keywords.", async () => {
         const allVectors: VectorizeVector[] = chunkRows.map((c) => ({
-          id: c.id, values: c.embedding, metadata: { document_id: docId, chunk_index: c.index },
+          id: c.id, values: c.embedding, metadata: { document_id: docId, chunk_index: c.index, kb_id: kbId },
         }));
         for (let i = 0; i < allVectors.length; i += 100) {
           await env.VECTORIZE.upsert(allVectors.slice(i, i + 100));
